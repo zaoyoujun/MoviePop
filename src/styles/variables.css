@@ -1,0 +1,89 @@
+:root {
+  color-scheme: dark;
+  --bg: #0b0d10;
+  --bg-elevated: #12161c;
+  --panel: rgba(18, 22, 28, 0.88);
+  --panel-strong: #171c24;
+  --panel-muted: #202632;
+  --border: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.14);
+  --text: #f5f7fa;
+  --text-soft: #a7b0be;
+  --text-faint: #7c8799;
+  --accent: #ff9248;
+  --accent-strong: #ff7c24;
+  --accent-soft: rgba(255, 146, 72, 0.16);
+  --teal: #53d0c2;
+  --danger: #f07178;
+  --success: #49c28d;
+  --shadow: 0 24px 70px rgba(0, 0, 0, 0.34);
+  --sidebar-bg: linear-gradient(180deg, #11151c 0%, #0b0d10 100%);
+  --radius: 22px;
+  --radius-sm: 16px;
+  --sidebar-width: 286px;
+  --main-padding: 30px 30px 36px;
+  --card-width: 210px;
+}
+
+:root[data-theme="graphite"] {
+  color-scheme: dark;
+  --bg: #090b0f;
+  --bg-elevated: #11151c;
+  --panel: rgba(19, 23, 30, 0.92);
+  --panel-strong: #161b24;
+  --panel-muted: #1d2430;
+  --border: rgba(228, 234, 245, 0.08);
+  --border-strong: rgba(228, 234, 245, 0.14);
+  --text: #f5f7fa;
+  --text-soft: #aab3c0;
+  --text-faint: #7d8796;
+  --accent: #82a0ff;
+  --accent-strong: #6689ff;
+  --accent-soft: rgba(130, 160, 255, 0.16);
+  --teal: #61d5c1;
+  --danger: #f07178;
+  --success: #49c28d;
+  --sidebar-bg: linear-gradient(180deg, #0e1218 0%, #080a0e 100%);
+}
+
+:root[data-theme="forest"] {
+  color-scheme: dark;
+  --bg: #09100c;
+  --bg-elevated: #121b15;
+  --panel: rgba(17, 27, 22, 0.9);
+  --panel-strong: #17231d;
+  --panel-muted: #203128;
+  --border: rgba(229, 242, 232, 0.08);
+  --border-strong: rgba(229, 242, 232, 0.15);
+  --text: #f3f8f4;
+  --text-soft: #adc0b2;
+  --text-faint: #819486;
+  --accent: #71ba67;
+  --accent-strong: #56a84a;
+  --accent-soft: rgba(113, 186, 103, 0.16);
+  --teal: #61d0b4;
+  --danger: #e1786e;
+  --success: #7fd18b;
+  --sidebar-bg: linear-gradient(180deg, #102117 0%, #09100c 100%);
+}
+
+:root[data-theme="coast"] {
+  color-scheme: dark;
+  --bg: #081117;
+  --bg-elevated: #0f1b24;
+  --panel: rgba(15, 27, 36, 0.9);
+  --panel-strong: #15232d;
+  --panel-muted: #1c3140;
+  --border: rgba(227, 242, 248, 0.08);
+  --border-strong: rgba(227, 242, 248, 0.14);
+  --text: #f1f7fa;
+  --text-soft: #abc0ca;
+  --text-faint: #7d929d;
+  --accent: #5aa4da;
+  --accent-strong: #3e91ce;
+  --accent-soft: rgba(90, 164, 218, 0.16);
+  --teal: #64d4c2;
+  --danger: #ee7970;
+  --success: #54cfa3;
+  --sidebar-bg: linear-gradient(180deg, #10202a 0%, #081117 100%);
+}
