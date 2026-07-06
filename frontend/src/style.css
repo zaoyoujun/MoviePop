@@ -1,0 +1,149 @@
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body,
+#app {
+  width: 100%;
+  height: 100%;
+  min-height: 100vh;
+}
+
+:root {
+  color-scheme: dark;
+  --mp-bg: #030506;
+  --mp-panel: rgba(14, 18, 20, 0.72);
+  --mp-panel-strong: rgba(20, 24, 26, 0.86);
+  --mp-line: rgba(255, 255, 255, 0.1);
+  --mp-line-strong: rgba(255, 255, 255, 0.18);
+  --mp-text: #fff7e8;
+  --mp-text-soft: rgba(248, 243, 233, 0.68);
+  --mp-text-muted: rgba(248, 243, 233, 0.46);
+  --mp-gold: #667eea;
+  --mp-gold-soft: rgba(102, 126, 234, 0.18);
+  --mp-teal: #764ba2;
+  --mp-coral: #f06f5c;
+  --mp-radius: 8px;
+}
+
+body {
+  overflow: hidden;
+  color: var(--mp-text);
+  background: var(--mp-bg);
+  font-family:
+    Inter,
+    "SF Pro Display",
+    "Segoe UI",
+    "Microsoft YaHei",
+    Arial,
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+button {
+  transition:
+    transform 0.18s ease,
+    border-color 0.18s ease,
+    background-color 0.18s ease,
+    color 0.18s ease,
+    box-shadow 0.18s ease;
+}
+
+button:active {
+  transform: translateY(1px);
+}
+
+#app {
+  display: flex;
+  flex-direction: column;
+}
+
+::selection {
+  color: #07100f;
+  background: var(--mp-teal);
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(214, 169, 76, 0.3);
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+@keyframes bubbleFloat {
+  0%, 100% {
+    transform: rotate(var(--rotation)) translate(0, 0) scale(1);
+    filter: brightness(1);
+  }
+  12.5% {
+    transform: rotate(calc(var(--rotation) + 2deg)) translate(calc(var(--drift-x) * 0.5), calc(var(--drift-y) * -0.8)) scale(1.03);
+    filter: brightness(1.03);
+  }
+  25% {
+    transform: rotate(calc(var(--rotation) + 1deg)) translate(var(--drift-x), calc(var(--drift-y) * -0.5)) scale(1.01);
+  }
+  37.5% {
+    transform: rotate(var(--rotation)) translate(calc(var(--drift-x) * 0.8), calc(var(--drift-y) * 0.3)) scale(0.99);
+  }
+  50% {
+    transform: rotate(calc(var(--rotation) - 1deg)) translate(calc(var(--drift-x) * 0.3), var(--drift-y)) scale(0.97);
+    filter: brightness(1.05);
+  }
+  62.5% {
+    transform: rotate(calc(var(--rotation) - 2deg)) translate(calc(var(--drift-x) * -0.3), calc(var(--drift-y) * 0.8)) scale(0.99);
+  }
+  75% {
+    transform: rotate(calc(var(--rotation) - 1deg)) translate(calc(var(--drift-x) * -0.8), calc(var(--drift-y) * 0.3)) scale(1.01);
+  }
+  87.5% {
+    transform: rotate(calc(var(--rotation) + 1deg)) translate(calc(var(--drift-x) * -0.5), calc(var(--drift-y) * -0.5)) scale(1.02);
+    filter: brightness(1.02);
+  }
+}
+
+@keyframes bubblePop {
+  0% {
+    transform: rotate(var(--rotation)) translate(var(--drift-x), var(--drift-y)) scale(1);
+  }
+  40% {
+    transform: rotate(calc(var(--rotation) + 3deg)) translate(calc(var(--drift-x) * 1.2), calc(var(--drift-y) - 12px)) scale(1.15);
+  }
+  60% {
+    transform: rotate(calc(var(--rotation) - 2deg)) translate(calc(var(--drift-x) * 1.1), calc(var(--drift-y) - 8px)) scale(1.08);
+  }
+  80% {
+    transform: rotate(calc(var(--rotation) + 1deg)) translate(calc(var(--drift-x) * 1.15), calc(var(--drift-y) - 10px)) scale(1.12);
+  }
+  100% {
+    transform: rotate(var(--rotation)) translate(calc(var(--drift-x) * 1.2), calc(var(--drift-y) - 10px)) scale(1.1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+  }
+}

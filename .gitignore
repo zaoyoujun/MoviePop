@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Node
+node_modules/
+
+# Build outputs
+dist/
+dist-ssr/
+frontend/build/
+frontend/build-*/
+frontend/backend-dist/
+frontend/backend-build/
+
+# IDE
+.idea/
+.vscode/
+*.suo
+*.ntvs*
+*.sw?
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Data
+backend/data/
+backend/covers/
+
+# Env
+.env
+.env.local
+
+# Chrome QA data
+.qa-chrome-left-column/
+.qa-chrome-left-column-2/
+
+# Misc
+*.tsbuildinfo
+.eslintcache

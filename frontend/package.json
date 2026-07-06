@@ -1,0 +1,73 @@
+{
+  "name": "MoviePop",
+  "version": "1.0.0",
+  "description": "MoviePop - A modern movie and anime library manager",
+  "author": "MoviePop Team",
+  "private": true,
+  "type": "module",
+  "main": "electron/main.js",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "electron:dev": "concurrently -k \"vite\" \"wait-on http://localhost:5173 && electron .\"",
+    "backend:build": "powershell -ExecutionPolicy Bypass -File scripts/build-backend.ps1",
+    "electron:build": "vite build && electron-builder",
+    "electron:portable": "powershell -ExecutionPolicy Bypass -Command \"$env:NODE_TLS_REJECT_UNAUTHORIZED='0'; npm run backend:build; if ($?) { npm run build }; if ($?) { npx electron-builder --win portable }\""
+  },
+  "build": {
+    "appId": "com.moviepop.app",
+    "productName": "MoviePop",
+    "directories": {
+      "output": "build"
+    },
+    "files": [
+      "dist/renderer/**/*",
+      "electron/**/*",
+      "package.json"
+    ],
+    "asar": true,
+    "extraResources": [
+      {
+        "from": "backend-dist/MoviePopBackend.exe",
+        "to": "backend/MoviePopBackend.exe"
+      }
+    ],
+    "win": {
+      "target": "portable",
+      "icon": "build-resources/icon.ico"
+    },
+    "mac": {
+      "target": "dmg",
+      "icon": "build-resources/icon.ico"
+    },
+    "linux": {
+      "target": "AppImage",
+      "icon": "build-resources/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  },
+  "dependencies": {
+    "@vicons/ionicons5": "^0.13.0",
+    "vue": "^3.5.32",
+    "vue-router": "^4.6.4"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^6.0.6",
+    "concurrently": "^10.0.3",
+    "electron": "^33.0.2",
+    "electron-builder": "^26.15.3",
+    "naive-ui": "^2.44.1",
+    "unplugin-auto-import": "^21.0.0",
+    "unplugin-vue-components": "^32.1.0",
+    "vite": "^8.0.8",
+    "vite-plugin-vue-devtools": "^8.1.1",
+    "wait-on": "^9.0.10"
+  },
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0"
+  }
+}
