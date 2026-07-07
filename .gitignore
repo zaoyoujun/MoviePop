@@ -41,6 +41,10 @@ backend/covers/
 .qa-chrome-left-column/
 .qa-chrome-left-column-2/
 
+# Auto-generated files
+frontend/auto-imports.d.ts
+frontend/components.d.ts
+
 # Misc
 *.tsbuildinfo
 .eslintcache

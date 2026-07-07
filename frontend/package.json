@@ -5,7 +5,7 @@
   "author": "MoviePop Team",
   "private": true,
   "type": "module",
-  "main": "electron/main.js",
+  "main": "../electron/main.js",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
@@ -23,7 +23,7 @@
     },
     "files": [
       "dist/renderer/**/*",
-      "electron/**/*",
+      "../electron/**/*",
       "package.json"
     ],
     "asar": true,

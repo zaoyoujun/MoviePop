@@ -15,7 +15,7 @@ const BACKEND_PORT = process.env.MOVIEPOP_BACKEND_PORT || '18987'
 
 const getIconPath = () => {
   const packagedIcon = join(process.resourcesPath, 'icon.ico')
-  const fallbackIcon = join(__dirname, '..', 'build-resources', 'icon.ico')
+  const fallbackIcon = join(__dirname, '..', 'frontend', 'build-resources', 'icon.ico')
   if (app.isPackaged && existsSync(packagedIcon)) return packagedIcon
   return fallbackIcon
 }
@@ -23,7 +23,7 @@ const getIconPath = () => {
 const getBackendPath = () => (
   app.isPackaged
     ? join(process.resourcesPath, 'backend', 'MoviePopBackend.exe')
-    : join(__dirname, '..', 'backend-dist', 'MoviePopBackend.exe')
+    : join(__dirname, '..', 'frontend', 'backend-dist', 'MoviePopBackend.exe')
 )
 
 const getBackendDataDir = () => {
@@ -126,7 +126,7 @@ const createWindow = () => {
   })
 
   if (app.isPackaged) {
-    const indexPath = join(__dirname, '..', 'dist', 'renderer', 'index.html')
+    const indexPath = join(__dirname, '..', 'frontend', 'dist', 'renderer', 'index.html')
     mainWindow.loadFile(indexPath)
   } else {
     mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL || 'http://localhost:5173')
