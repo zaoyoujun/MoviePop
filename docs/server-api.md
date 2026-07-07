@@ -1,10 +1,10 @@
 # 服务器 API 文档
 
-本文档描述前端服务器页当前需要对接的真实接口。接口统一使用 JSON，请求基础路径为 `/api`，Vite 开发环境会将 `/api` 代理到后端服务。
+本文档描述前端服务器页和设置页需要对接的真实接口。接口统一使用 JSON，请求基础路径为 `/api`，Vite 开发环境会将 `/api` 代理到后端服务。
 
 ## 通用响应
 
-所有接口建议返回统一结构：
+所有接口返回统一结构：
 
 ```json
 {
@@ -14,21 +14,27 @@
 }
 ```
 
-- `code`: `0` 表示成功，非 `0` 表示失败。
-- `message`: 失败原因或成功提示。
-- `data`: 业务数据。
+- `code`: `0` 表示成功，非 `0` 表示失败
+- `message`: 失败原因或成功提示
+- `data`: 业务数据
 
-前端会在 `code !== 0` 时把 `message` 显示为错误提示。
+## 常用错误码
+
+| code | 说明 |
+| --- | --- |
+| 0 | 成功 |
+| 400 | 参数错误、前置条件未满足 |
+| 40001 | 数据源连接校验失败 |
+| 404 | 数据源或影片不存在 |
+| 500 | 服务端错误 |
 
 ## 数据源类型
 
-添加数据源时，页面只展示两个大类：
-
-| 大类 | 可选类型 | type |
-| --- | --- | --- |
-| 服务器 | WebDAV | `webdav` |
-| 服务器 | OpenList | `openlist` |
-| 本地存储 | 本地目录 | `local` |
+| 类型 | 说明 |
+| --- | --- |
+| `webdav` | WebDAV 服务器 |
+| `openlist` | 内置 OpenList 网盘 |
+| `local` | 本地目录 |
 
 ## Source 对象
 
@@ -40,7 +46,12 @@
   "typeLabel": "WebDAV",
   "path": "https://dav.example.com/media",
   "username": "demo",
+  "password": "******",
   "active": false,
+  "mountPath": "/quark-movies",
+  "selected_paths": ["/quark-movies"],
+  "driver": "Quark",
+  "cookie": "******",
   "tint": "rgba(98, 96, 126, 0.76)",
   "stats": {
     "files": 1497,
@@ -50,26 +61,123 @@
     "music": 0,
     "unmatched": 0
   },
+  "scanError": "",
   "createdAt": "2026-06-06T10:00:00+08:00",
   "updatedAt": "2026-06-06T10:00:00+08:00"
 }
 ```
 
-字段说明：
+## 一、配置接口
 
-| 字段 | 类型 | 必填 | 说明 |
-| --- | --- | --- | --- |
-| `id` | string | 是 | 数据源唯一 ID。 |
-| `name` | string | 是 | 数据源名称。 |
-| `type` | string | 是 | `webdav`、`openlist` 或 `local`。 |
-| `typeLabel` | string | 否 | 显示名称，不传时前端按 `type` 兜底显示。 |
-| `path` | string | 是 | WebDAV / OpenList 地址或本地路径。 |
-| `username` | string | 否 | 用户名。密码不要在列表接口中返回。 |
-| `active` | boolean | 否 | 是否为当前选中的资源库。 |
-| `tint` | string | 否 | 卡片主题色；不传时前端随机生成。 |
-| `stats` | object | 是 | 资源统计。 |
+### 1.1 获取公开配置
 
-## 获取数据源列表
+```http
+GET /api/config
+```
+
+响应：
+
+```json
+{
+  "code": 0,
+  "message": "ok",
+  "data": {
+    "openlist_enabled": false,
+    "openlist_port": 5244,
+    "openlist_auto_start": false,
+    "openlist_auto_login": true,
+    "openlist_auto_reset_password": true,
+    "scan_max_depth": 2,
+    "local_scan_max_depth": 3,
+    "enable_auto_scrape": false,
+    "scrape_source": "auto",
+    "tmdb_api_key": "",
+    "tmdb_api_base": "https://api.themoviedb.org/3",
+    "tmdb_image_base": "https://image.tmdb.org/t/p/w500",
+    "douban_cookie": ""
+  }
+}
+```
+
+### 1.2 更新配置
+
+```http
+POST /api/config
+Content-Type: application/json
+```
+
+请求：
+
+```json
+{
+  "openlist_enabled": true,
+  "openlist_port": 5244,
+  "openlist_auto_start": true,
+  "openlist_auto_login": true,
+  "openlist_auto_reset_password": true,
+  "enable_auto_scrape": true
+}
+```
+
+### 1.3 获取刮削设置
+
+```http
+GET /api/settings/scraper
+```
+
+响应：
+
+```json
+{
+  "code": 0,
+  "message": "ok",
+  "data": {
+    "enable_auto_scrape": true,
+    "scrape_source": "auto",
+    "scrapeSource": "auto",
+    "tmdb_api_key": "xxxx",
+    "tmdbApiKey": "xxxx",
+    "tmdb_api_base": "https://api.themoviedb.org/3",
+    "tmdb_image_base": "https://image.tmdb.org/t/p/w500",
+    "douban_cookie": "bid=...",
+    "doubanCookie": "bid=..."
+  }
+}
+```
+
+### 1.4 保存刮削设置
+
+```http
+POST /api/settings/scraper
+Content-Type: application/json
+```
+
+请求：
+
+```json
+{
+  "doubanCookie": "bid=...",
+  "tmdbApiKey": "xxxx",
+  "enable_auto_scrape": true,
+  "scrape_source": "auto"
+}
+```
+
+### 1.5 清空缓存
+
+```http
+POST /api/cache/clear
+```
+
+### 1.6 重置应用
+
+```http
+POST /api/reset
+```
+
+## 二、数据源接口
+
+### 2.1 获取数据源列表
 
 ```http
 GET /api/sources
@@ -81,92 +189,65 @@ GET /api/sources
 {
   "code": 0,
   "message": "ok",
-  "data": {
-    "list": [
-      {
-        "id": "src-webdav-1",
-        "name": "夸克",
-        "type": "webdav",
-        "typeLabel": "WebDAV",
-        "path": "https://dav.example.com/media",
-        "active": false,
-        "stats": {
-          "files": 1497,
-          "movies": 0,
-          "series": 0,
-          "anime": 0,
-          "music": 0,
-          "unmatched": 0
-        }
-      }
-    ]
-  }
+  "data": [
+    {
+      "id": "src-webdav-1",
+      "name": "夸克",
+      "type": "webdav",
+      "typeLabel": "WebDAV",
+      "path": "https://dav.example.com/media",
+      "username": "demo",
+      "active": false,
+      "mountPath": "/quark-movies",
+      "selected_paths": ["/quark-movies"],
+      "stats": {
+        "files": 1497,
+        "movies": 0,
+        "series": 0,
+        "anime": 0,
+        "music": 0,
+        "unmatched": 0
+      },
+      "scanError": ""
+    }
+  ]
 }
 ```
 
-## 验证连接
-
-用于添加或修改数据源时测试连接。
+### 2.2 验证数据源连接
 
 ```http
 POST /api/sources/verify
 Content-Type: application/json
 ```
 
-请求：
-
-```json
-{
-  "name": "WebDAV",
-  "type": "webdav",
-  "path": "https://dav.example.com/media",
-  "username": "demo",
-  "password": "secret"
-}
-```
-
-响应：
-
-```json
-{
-  "code": 0,
-  "message": "连接成功",
-  "data": {
-    "ok": true
-  }
-}
-```
-
-失败时：
-
-```json
-{
-  "code": 40001,
-  "message": "连接失败，请检查地址或账号密码",
-  "data": {
-    "ok": false
-  }
-}
-```
-
-## 浏览媒体路径
-
-点击添加后，前端会进入媒体路径选择页。后端需要根据当前路径返回目录和文件，文件夹与文件都通过复选框选择。
-
-```http
-POST /api/sources/browse
-Content-Type: application/json
-```
-
-请求：
+#### WebDAV 请求
 
 ```json
 {
   "type": "webdav",
-  "path": "https://dav.example.com/media",
-  "username": "demo",
-  "password": "secret",
-  "currentPath": "/"
+  "host": "dav.example.com",
+  "port": "443",
+  "protocol": "https",
+  "username": "user",
+  "password": "password"
+}
+```
+
+#### 本地目录请求
+
+```json
+{
+  "type": "local",
+  "path": "D:/Videos"
+}
+```
+
+#### OpenList 请求
+
+```json
+{
+  "type": "openlist"
 }
 ```
 
@@ -177,145 +258,134 @@ Content-Type: application/json
   "code": 0,
   "message": "ok",
   "data": {
-    "path": "/",
-    "entries": [
+    "ok": true
+  }
+}
+```
+
+### 2.3 浏览目录
+
+```http
+POST /api/sources/browse
+Content-Type: application/json
+```
+
+#### 按连接信息浏览
+
+```json
+{
+  "type": "webdav",
+  "host": "dav.example.com",
+  "port": "443",
+  "protocol": "https",
+  "username": "user",
+  "password": "password",
+  "path": "/Movies"
+}
+```
+
+#### 浏览已保存的数据源
+
+```json
+{
+  "source_id": "abc123",
+  "path": "/Movies"
+}
+```
+
+响应：
+
+```json
+{
+  "code": 0,
+  "message": "ok",
+  "data": {
+    "path": "/Movies",
+    "ok": true,
+    "items": [
       {
-        "name": "电影",
+        "name": "Anime",
         "type": "folder",
-        "path": "/电影"
+        "path": "/Movies/Anime",
+        "isDir": true
       },
       {
-        "name": "夜航信号.mp4",
+        "name": "movie.mkv",
         "type": "file",
-        "path": "/夜航信号.mp4",
-        "size": 1843200000,
-        "modifiedAt": "2026-06-06T10:00:00+08:00"
+        "path": "/Movies/movie.mkv",
+        "isDir": false
       }
     ]
   }
 }
 ```
 
-规则：
-
-- `entries[].type` 只能是 `folder` 或 `file`。
-- 用户选择文件夹时，后端添加数据源后应扫描该文件夹下内容。
-- 用户选择文件时，后端只添加对应文件。
-- 前端会用 `entries[].path` 作为后续进入目录和确认添加的路径。
-
-## 添加数据源
-
-确认选择媒体路径后调用。前端支持一次选择多个文件夹或文件。
+### 2.4 添加数据源
 
 ```http
 POST /api/sources
 Content-Type: application/json
 ```
 
-请求：
+#### WebDAV 请求
 
 ```json
 {
-  "name": "WebDAV",
+  "name": "我的 WebDAV",
   "type": "webdav",
-  "path": "https://dav.example.com/media",
-  "username": "demo",
-  "password": "secret",
-  "selectedPaths": [
-    {
-      "name": "电影",
-      "type": "folder",
-      "path": "/电影"
+  "host": "dav.example.com",
+  "port": "443",
+  "protocol": "https",
+  "username": "user",
+  "password": "password",
+  "selected_paths": ["/Movies", "/Anime"],
+  "auto_scan": true
+}
+```
+
+#### 本地目录请求
+
+```json
+{
+  "name": "本地视频",
+  "type": "local",
+  "path": "D:/Videos",
+  "selected_paths": ["D:/Videos/Movies"],
+  "auto_scan": true
+}
+```
+
+响应：
+
+```json
+{
+  "code": 0,
+  "message": "Data source added successfully, scanning in background",
+  "data": {
+    "source": {
+      "id": "abc123",
+      "name": "我的 WebDAV",
+      "type": "webdav"
     },
-    {
-      "name": "夜航信号.mp4",
-      "type": "file",
-      "path": "/夜航信号.mp4"
+    "scanStatus": {
+      "scanning": true,
+      "stage": "queued"
     }
-  ]
-}
-```
-
-响应推荐直接返回最新列表：
-
-```json
-{
-  "code": 0,
-  "message": "添加成功",
-  "data": {
-    "list": []
   }
 }
 ```
 
-也可以只返回新增对象：
-
-```json
-{
-  "code": 0,
-  "message": "添加成功",
-  "data": {
-    "source": {}
-  }
-}
-```
-
-## 修改数据源
-
-卡片菜单点击“修改”后，前端会回显已有数据并提交更新。
+### 2.5 更新数据源
 
 ```http
+POST /api/sources/{id}
 PUT /api/sources/{id}
 Content-Type: application/json
 ```
 
-请求：
+请求字段同新增接口。
 
-```json
-{
-  "name": "夸克",
-  "type": "webdav",
-  "path": "https://dav.example.com/media",
-  "username": "demo",
-  "password": "new-secret"
-}
-```
-
-响应：
-
-```json
-{
-  "code": 0,
-  "message": "修改成功",
-  "data": {
-    "source": {}
-  }
-}
-```
-
-## 重扫数据源
-
-卡片菜单点击“重扫”后调用。后端根据数据源保存的路径重新扫描并返回最新统计。
-
-```http
-POST /api/sources/{id}/rescan
-```
-
-响应：
-
-```json
-{
-  "code": 0,
-  "message": "重扫完成",
-  "data": {
-    "source": {}
-  }
-}
-```
-
-## 删除数据源
-
-卡片菜单点击“删除”后，前端会先弹出确认框，再调用删除接口。
+### 2.6 删除数据源
 
 ```http
 DELETE /api/sources/{id}
@@ -326,19 +396,396 @@ DELETE /api/sources/{id}
 ```json
 {
   "code": 0,
-  "message": "删除成功",
+  "message": "ok",
   "data": {
-    "deleted": true
+    "deleted": true,
+    "openlist": {
+      "deleted": true
+    }
   }
 }
 ```
 
-## 前端当前对接点
+### 2.7 查询扫描状态
 
-- 列表页初次进入调用 `GET /api/sources`。
-- 添加/修改弹窗中的“验证连接”调用 `POST /api/sources/verify`。
-- 添加弹窗点击“添加”后调用 `POST /api/sources/browse` 打开路径选择。
-- 路径选择页确认后调用 `POST /api/sources`。
-- 修改调用 `PUT /api/sources/{id}`。
-- 重扫调用 `POST /api/sources/{id}/rescan`。
-- 删除调用 `DELETE /api/sources/{id}`。
+```http
+GET /api/sources/{id}/scan-status
+```
+
+响应：
+
+```json
+{
+  "code": 0,
+  "message": "ok",
+  "data": {
+    "scanning": true,
+    "stage": "scan",
+    "current": "/Movies/Anime",
+    "processed": 10,
+    "total": 120,
+    "error": "",
+    "startedAt": "2026-06-24T09:40:00",
+    "finishedAt": ""
+  }
+}
+```
+
+`stage` 可能值：
+
+| stage | 说明 |
+| --- | --- |
+| `idle` | 空闲 |
+| `queued` | 已排队 |
+| `scan` | 正在扫描目录 |
+| `parse` | 正在识别影片 |
+| `scrape` | 正在刮削封面和简介 |
+| `done` | 完成 |
+| `error` | 失败 |
+
+### 2.8 重新扫描
+
+```http
+POST /api/sources/{id}/rescan
+```
+
+响应：
+
+```json
+{
+  "code": 0,
+  "message": "ok",
+  "data": {
+    "source": {},
+    "scanStatus": {
+      "scanning": true,
+      "stage": "queued"
+    }
+  }
+}
+```
+
+## 三、内置 OpenList 接口
+
+### 3.1 获取 OpenList 状态
+
+```http
+GET /api/openlist/status
+```
+
+响应：
+
+```json
+{
+  "code": 0,
+  "message": "ok",
+  "data": {
+    "status": "running",
+    "port": 5244,
+    "pid": 1234,
+    "uptime_seconds": 60,
+    "error_message": "",
+    "version": "v3.42.0",
+    "binary_available": true,
+    "auto_start": true,
+    "auto_login": true,
+    "auto_reset_password": true,
+    "enabled": true,
+    "base_url": "http://127.0.0.1:5244",
+    "logged_in": true,
+    "token_expires_in": 3600,
+    "admin_username": "admin",
+    "admin_password": "******",
+    "openlist_username": "admin",
+    "openlist_password": "******"
+  }
+}
+```
+
+### 3.2 启动内置 OpenList
+
+```http
+POST /api/openlist/start
+```
+
+响应：
+
+```json
+{
+  "code": 0,
+  "message": "ok",
+  "data": {
+    "success": true,
+    "status": "running",
+    "port": 5244,
+    "logged_in": true
+  }
+}
+```
+
+### 3.3 停止内置 OpenList
+
+```http
+POST /api/openlist/stop
+```
+
+### 3.4 获取支持的网盘类型
+
+```http
+GET /api/openlist/drivers
+```
+
+响应：
+
+```json
+{
+  "code": 0,
+  "message": "ok",
+  "data": [
+    {
+      "driver": "Quark",
+      "label": "夸克网盘",
+      "fields": [
+        {
+          "key": "cookie",
+          "label": "Cookie",
+          "type": "textarea",
+          "required": true
+        }
+      ]
+    }
+  ]
+}
+```
+
+### 3.5 浏览 OpenList 目录
+
+```http
+POST /api/openlist/browse
+Content-Type: application/json
+```
+
+请求：
+
+```json
+{
+  "path": "/",
+  "page": 1,
+  "per_page": 100
+}
+```
+
+响应结构同 `/api/sources/browse`。
+
+### 3.6 挂载 OpenList 网盘并添加为数据源
+
+```http
+POST /api/sources/openlist/mount
+Content-Type: application/json
+```
+
+#### 夸克网盘请求
+
+```json
+{
+  "name": "夸克电影",
+  "driver": "Quark",
+  "mount_path": "/quark-movies",
+  "cookie": "复制来的 Cookie 字符串",
+  "root_folder_id": "0",
+  "selected_paths": ["/quark-movies"],
+  "auto_scan": true
+}
+```
+
+#### 阿里云盘 Open 请求
+
+```json
+{
+  "name": "阿里云盘",
+  "driver": "AliyundriveOpen",
+  "mount_path": "/aliyun",
+  "refresh_token": "refresh token",
+  "root_folder_id": "root",
+  "drive_type": "default",
+  "selected_paths": ["/aliyun"],
+  "auto_scan": true
+}
+```
+
+响应：
+
+```json
+{
+  "code": 0,
+  "message": "OpenList data source mounted successfully, scanning in background",
+  "data": {
+    "source": {
+      "id": "abc123",
+      "name": "夸克电影",
+      "type": "openlist",
+      "driver": "Quark",
+      "mountPath": "/quark-movies",
+      "selected_paths": ["/quark-movies"]
+    },
+    "storage": {
+      "id": 1
+    },
+    "scanStatus": {
+      "scanning": true,
+      "stage": "queued"
+    }
+  }
+}
+```
+
+### 3.7 获取 OpenList 存储列表
+
+```http
+GET /api/openlist/storages
+```
+
+### 3.8 清理 OpenList 存储
+
+```http
+POST /api/openlist/storages/cleanup
+```
+
+## 四、手动刮削接口
+
+### 4.1 获取刮削源列表
+
+```http
+GET /api/scrape/sources
+```
+
+响应：
+
+```json
+{
+  "code": 0,
+  "message": "ok",
+  "data": [
+    {"label": "Auto", "value": "auto"},
+    {"label": "TMDB", "value": "tmdb"},
+    {"label": "AniBK", "value": "anibk"},
+    {"label": "Douban", "value": "douban"}
+  ]
+}
+```
+
+### 4.2 搜索元数据
+
+```http
+POST /api/scrape/search
+Content-Type: application/json
+```
+
+请求：
+
+```json
+{
+  "source": "auto",
+  "keyword": "Dr. Stone"
+}
+```
+
+响应：
+
+```json
+{
+  "code": 0,
+  "message": "ok",
+  "data": [
+    {
+      "title": "Dr. Stone",
+      "source": "tmdb",
+      "sourceId": "77597",
+      "year": 2019,
+      "genres": ["Animation", "Sci-Fi"],
+      "country": "日本",
+      "score": 8.4,
+      "description": "...",
+      "posterUrl": "https://...",
+      "coverUrl": "https://...",
+      "backdropUrl": "https://..."
+    }
+  ]
+}
+```
+
+### 4.3 提交元数据
+
+```http
+POST /api/scrape/submit
+Content-Type: application/json
+```
+
+请求：
+
+```json
+{
+  "movie_id": "movie-id",
+  "source": "tmdb",
+  "applyMode": "all",
+  "data": {
+    "title": "Matched Title",
+    "year": 2024,
+    "score": 8.4,
+    "description": "...",
+    "coverUrl": "https://...",
+    "backdropUrl": "https://..."
+  }
+}
+```
+
+## 五、前端实现建议
+
+### 5.1 设置页
+
+设置页需要提供：
+
+- “启用内置 OpenList”开关：保存到 `openlist_enabled`
+- “OpenList 端口”：保存到 `openlist_port`
+- “开机自动启动”：保存到 `openlist_auto_start`
+- “自动登录”：保存到 `openlist_auto_login`
+- “启动服务”按钮：调用 `POST /api/openlist/start`
+- “停止服务”按钮：调用 `POST /api/openlist/stop`
+- 状态区：轮询 `GET /api/openlist/status`
+
+### 5.2 添加数据源弹窗
+
+数据源类型建议：
+
+- WebDAV
+- 本地目录
+- 内置 OpenList
+
+“内置 OpenList”选项显示条件：
+
+```js
+const status = await get('/openlist/status')
+const showBuiltinOpenList =
+  status.enabled &&
+  status.status === 'running' &&
+  status.logged_in
+```
+
+### 5.3 扫描进度轮询
+
+建议每 1 到 2 秒轮询一次：
+
+```js
+async function pollScanStatus(sourceId) {
+  const timer = setInterval(async () => {
+    const status = await get(`/sources/${sourceId}/scan-status`)
+    updateScanUI(status)
+
+    if (!status.scanning) {
+      clearInterval(timer)
+      refreshSourceList()
+      refreshHomeData()
+    }
+  }, 1500)
+}
+```

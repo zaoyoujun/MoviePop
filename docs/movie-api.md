@@ -1,6 +1,6 @@
 # 影视 API 文档
 
-本文档先定义首页、分类列表、详情页需要的影视接口。前端会按这些字段消费数据，mock 时字段名尽量保持一致。
+本文档描述前端影视相关页面需要对接的真实接口。接口统一使用 JSON，请求基础路径为 `/api`，Vite 开发环境会将 `/api` 代理到后端服务。
 
 ## 基础约定
 
@@ -22,6 +22,31 @@
   - `documentary`
   - `other`
 
+## 通用响应
+
+所有接口返回统一结构：
+
+```json
+{
+  "code": 0,
+  "message": "ok",
+  "data": {}
+}
+```
+
+- `code`: `0` 表示成功，非 `0` 表示失败
+- `message`: 失败原因或成功提示
+- `data`: 业务数据
+
+## 常用错误码
+
+| code | 说明 |
+| --- | --- |
+| 0 | 成功 |
+| 400 | 参数错误 |
+| 404 | 资源不存在 |
+| 500 | 服务端错误 |
+
 ## 通用数据结构
 
 ### MovieItem
@@ -30,17 +55,36 @@
 {
   "id": "farewell-lily",
   "title": "葬送的芙莉莲",
-  "alias": ["Frieren"],
+  "localTitle": "葬送的芙莉莲",
+  "matchedTitle": "",
+  "versionTitle": "",
   "category": "anime",
   "year": 2023,
   "sourceType": "webdav",
   "sourceName": "WebDAV",
   "durationText": "10 集",
   "coverUrl": "https://example.com/cover.jpg",
+  "posterUrl": "https://example.com/cover.jpg",
   "backdropUrl": "https://example.com/backdrop.jpg",
-  "tags": ["动画", "奇幻", "冒险"],
   "score": 8.9,
+  "genres": ["动画", "奇幻", "冒险"],
+  "countries": ["日本"],
+  "region": "日本",
+  "languages": ["日语"],
+  "metadataSource": "tmdb",
+  "originalTitle": "葬送のフリーレン",
+  "tmdbId": "1105238",
+  "tmdbMediaType": "tv",
+  "doubanUrl": "https://movie.douban.com/subject/36142824/",
+  "voteCount": 12580,
+  "quality": "1080p",
+  "videoCodec": "H.265",
+  "audioInfo": "DTS-HD MA 5.1",
+  "subtitleInfo": "中文字幕",
   "isFavorite": false,
+  "hasVersions": false,
+  "variantCount": 1,
+  "seasonCount": 1,
   "progress": {
     "currentEpisode": 1,
     "totalEpisodes": 10,
@@ -50,14 +94,18 @@
 }
 ```
 
-### LibraryStats
+### EpisodeItem
 
 ```json
 {
-  "total": 7,
-  "remote": 7,
-  "local": 0,
-  "favorite": 0
+  "id": "ep-1",
+  "episodeId": "realMovieId::ep1",
+  "title": "第 1 集",
+  "episodeNumber": 1,
+  "durationText": "24 分钟",
+  "playUrl": "/api/movies/farewell-lily/play?episode_id=ep-1",
+  "sourceType": "webdav",
+  "movieId": "realMovieId"
 }
 ```
 
@@ -106,16 +154,14 @@
       {
         "id": "farewell-lily",
         "title": "葬送的芙莉莲",
-        "alias": ["Frieren"],
         "category": "anime",
         "year": 2023,
         "sourceType": "webdav",
         "sourceName": "WebDAV",
-        "durationText": "10 集",
         "coverUrl": "https://example.com/frieren-cover.jpg",
         "backdropUrl": "https://example.com/frieren-backdrop.jpg",
-        "tags": ["动画", "奇幻", "冒险"],
         "score": 8.9,
+        "genres": ["动画", "奇幻", "冒险"],
         "isFavorite": false,
         "progress": {
           "currentEpisode": 1,
@@ -141,12 +187,12 @@
 
 | 参数 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
-| category | string | 否 | 分类 |
-| keyword | string | 否 | 按标题、别名、简介搜索 |
-| sourceType | string | 否 | `webdav` / `openlist` / `local` |
+| category | string | 否 | 分类，`all` 表示全部 |
+| keyword | string | 否 | 按标题搜索 |
+| source_type | string | 否 | `webdav` / `openlist` / `local` |
 | favorite | boolean | 否 | 是否只看收藏 |
 | page | number | 否 | 页码，默认 `1` |
-| pageSize | number | 否 | 每页数量，默认 `24` |
+| page_size | number | 否 | 每页数量，默认 `24` |
 
 ### Response
 
@@ -156,6 +202,7 @@
   "message": "ok",
   "data": {
     "list": [],
+    "items": [],
     "pagination": {
       "page": 1,
       "pageSize": 24,
@@ -165,9 +212,74 @@
 }
 ```
 
-`list` 中每一项使用 `MovieItem` 结构。
+## 3. 获取收藏列表
 
-## 3. 获取影视详情
+### Request
+
+`GET /api/movies/favorites`
+
+### Query
+
+| 参数 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| category | string | 否 | 分类 |
+| keyword | string | 否 | 搜索关键词 |
+| source_type | string | 否 | 数据源类型 |
+| page | number | 否 | 页码，默认 `1` |
+| page_size | number | 否 | 每页数量，默认 `24` |
+
+### Response
+
+同 `GET /api/movies`
+
+## 4. 获取观影历史
+
+### Request
+
+`GET /api/movies/history`
+
+### Query
+
+| 参数 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| page | number | 否 | 页码，默认 `1` |
+| page_size | number | 否 | 每页数量，默认 `24` |
+
+### Response
+
+```json
+{
+  "code": 0,
+  "message": "ok",
+  "data": {
+    "list": [
+      {
+        "id": "farewell-lily",
+        "title": "葬送的芙莉莲",
+        "coverUrl": "https://example.com/cover.jpg",
+        "playback": {
+          "currentEpisode": 1,
+          "currentTime": 120,
+          "duration": 1440,
+          "percent": 8,
+          "lastPlayTime": "2026-06-05T12:00:00+08:00",
+          "watchSeconds": 120
+        },
+        "lastPlayTime": "2026-06-05T12:00:00+08:00",
+        "watchSeconds": 120,
+        "resumePosition": 120
+      }
+    ],
+    "pagination": {
+      "page": 1,
+      "pageSize": 24,
+      "total": 100
+    }
+  }
+}
+```
+
+## 5. 获取影视详情
 
 用于详情页。
 
@@ -184,26 +296,39 @@
   "data": {
     "id": "farewell-lily",
     "title": "葬送的芙莉莲",
-    "alias": ["Frieren"],
+    "localTitle": "葬送的芙莉莲",
+    "matchedTitle": "葬送のフリーレン",
+    "versionTitle": "",
     "category": "anime",
     "year": 2023,
     "sourceType": "webdav",
     "sourceName": "WebDAV",
     "durationText": "10 集",
     "coverUrl": "https://example.com/frieren-cover.jpg",
+    "posterUrl": "https://example.com/frieren-cover.jpg",
     "backdropUrl": "https://example.com/frieren-backdrop.jpg",
-    "tags": ["动画", "奇幻", "冒险"],
     "score": 8.9,
+    "genres": ["动画", "奇幻", "冒险"],
+    "countries": ["日本"],
+    "region": "日本",
+    "languages": ["日语"],
+    "metadataSource": "tmdb",
+    "originalTitle": "葬送のフリーレン",
     "description": "勇者一行击败魔王后的漫长旅途故事。",
     "isFavorite": false,
+    "hasVersions": false,
+    "versions": [],
+    "seasons": [],
     "episodes": [
       {
         "id": "ep-1",
+        "episodeId": "realMovieId::ep1",
         "title": "第 1 集",
         "episodeNumber": 1,
         "durationText": "24 分钟",
-        "playUrl": "/api/movies/farewell-lily/play/ep-1",
-        "sourceType": "webdav"
+        "playUrl": "/api/movies/farewell-lily/play?episode_id=ep-1",
+        "sourceType": "webdav",
+        "movieId": "realMovieId"
       }
     ],
     "progress": {
@@ -211,12 +336,13 @@
       "totalEpisodes": 10,
       "percent": 12
     },
+    "metadataLocked": false,
     "updatedAt": "2026-06-05T12:00:00+08:00"
   }
 }
 ```
 
-## 4. 获取播放地址
+## 6. 获取播放地址
 
 用于点击“立即播放”。
 
@@ -228,7 +354,8 @@
 
 | 参数 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
-| episodeId | string | 否 | 剧集/动漫可传；电影可不传 |
+| episode_id | string | 否 | 剧集 ID |
+| player_type | string | 否 | 播放器类型，默认 `web` |
 
 ### Response
 
@@ -241,77 +368,188 @@
     "episodeId": "ep-1",
     "playUrl": "https://example.com/video.mp4",
     "headers": {
-      "Authorization": "Bearer mock-token"
+      "x-moviepop-prefetch": "parallel"
     },
-    "sourceType": "webdav"
+    "sourceType": "webdav",
+    "playerType": "web",
+    "resumePosition": 120
   }
 }
 ```
 
-如果播放地址不需要额外请求，也可以直接在详情页 `episodes[].playUrl` 返回最终播放地址。
+## 7. 获取视频流
 
-## 错误响应
+用于 Web 播放器流式播放。
+
+### Request
+
+`GET /api/movies/:id/stream`
+
+### Query
+
+| 参数 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| episode_id | string | 否 | 剧集 ID |
+
+### Response
+
+返回视频流（支持 Range 请求）。
+
+## 8. 更新播放进度
+
+### Request
+
+`POST /api/movies/:id/playback`
+
+### Body
 
 ```json
 {
-  "code": 404,
-  "message": "movie not found",
-  "data": null
+  "episodeId": "realMovieId::ep1",
+  "episodeNumber": 1,
+  "currentTime": 120,
+  "duration": 1440,
+  "watchSecondsDelta": 60
 }
 ```
 
-常用错误码：
-
-| code | 说明 |
-| --- | --- |
-| 0 | 成功 |
-| 400 | 参数错误 |
-| 404 | 资源不存在 |
-| 500 | 服务端错误 |
-
-## 前端首批需要 mock 的最低字段
-
-如果你想先快速 mock 首页，只需要实现：
-
-`GET /api/movies/home`
-
-最低字段：
+### Response
 
 ```json
 {
   "code": 0,
   "message": "ok",
   "data": {
-    "stats": {
-      "total": 7,
-      "remote": 7,
-      "local": 0,
-      "favorite": 0
+    "id": "farewell-lily",
+    "episodeId": "realMovieId::ep1",
+    "episodeNumber": 1,
+    "currentTime": 120,
+    "duration": 1440,
+    "percent": 8,
+    "watchSeconds": 120,
+    "episodeProgress": {
+      "currentTime": 120,
+      "duration": 1440,
+      "percent": 8,
+      "watchSeconds": 60,
+      "lastPlayTime": "2026-06-05T12:00:00+08:00"
+    }
+  }
+}
+```
+
+## 9. 收藏/取消收藏
+
+### 收藏
+
+`POST /api/movies/:id/favorite`
+
+### 取消收藏
+
+`DELETE /api/movies/:id/favorite`
+
+### Response
+
+```json
+{
+  "code": 0,
+  "message": "ok",
+  "data": {
+    "id": "farewell-lily",
+    "isFavorite": true
+  }
+}
+```
+
+## 10. 更新自定义资料
+
+### Request
+
+`POST /api/movies/:id/metadata/custom`
+
+### Body
+
+```json
+{
+  "data": {
+    "title": "自定义标题",
+    "description": "自定义简介",
+    "coverUrl": "https://example.com/custom-cover.jpg",
+    "backdropUrl": "https://example.com/custom-backdrop.jpg",
+    "score": 9.0
+  },
+  "applyMode": "all",
+  "metadataLocked": true
+}
+```
+
+### Response
+
+返回更新后的影片详情。
+
+## 11. 锁定/解锁资料
+
+### Request
+
+`POST /api/movies/:id/metadata/lock`
+
+### Body
+
+```json
+{
+  "locked": true
+}
+```
+
+### Response
+
+返回更新后的影片详情。
+
+## 12. 观影统计
+
+### Request
+
+`GET /api/movies/stats`
+
+### Response
+
+```json
+{
+  "code": 0,
+  "message": "ok",
+  "data": {
+    "overview": {
+      "total": 30,
+      "watched": 6,
+      "completed": 1,
+      "inProgress": 1,
+      "favorite": 0,
+      "watchSeconds": 3642,
+      "watchHours": 1.0,
+      "completionRate": 16.7,
+      "favoriteRate": 0.0,
+      "avgProgress": 17.7,
+      "avgRating": 8.3
     },
-    "hero": [
-      {
-        "id": "farewell-lily",
-        "title": "葬送的芙莉莲",
-        "category": "anime",
-        "year": 2023,
-        "sourceType": "webdav",
-        "sourceName": "WebDAV",
-        "durationText": "10 集",
-        "backdropUrl": "https://example.com/backdrop.jpg",
-        "tags": ["动画", "2023", "WebDAV", "10 集"]
-      }
+    "metrics": [
+      { "key": "total", "label": "片库条目", "value": 30, "unit": "部", "description": "当前片库中可识别的影视条目" }
     ],
-    "items": [
-      {
-        "id": "farewell-lily",
-        "title": "葬送的芙莉莲",
-        "category": "anime",
-        "year": 2023,
-        "sourceType": "webdav",
-        "sourceName": "WebDAV",
-        "coverUrl": "https://example.com/cover.jpg"
-      }
-    ]
+    "categoryDistribution": [
+      { "label": "动漫", "value": 18, "percent": 60.0 }
+    ],
+    "watchedCategoryDistribution": [],
+    "sourceDistribution": [],
+    "tagDistribution": [],
+    "timeDistribution": [],
+    "weekdayDistribution": [],
+    "completionStats": [],
+    "recentHistory": [],
+    "personality": {
+      "code": "ENTJ",
+      "title": "片单指挥官",
+      "algorithmVersion": "moviepop-local-v1",
+      "dimensions": []
+    }
   }
 }
 ```
