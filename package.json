@@ -35,15 +35,15 @@
     ],
     "win": {
       "target": "portable",
-      "icon": "frontend/图标.ico"
+      "icon": "public/图标.ico"
     },
     "mac": {
       "target": "dmg",
-      "icon": "frontend/图标.ico"
+      "icon": "public/图标.ico"
     },
     "linux": {
       "target": "AppImage",
-      "icon": "frontend/图标.ico"
+      "icon": "public/图标.ico"
     },
     "nsis": {
       "oneClick": false,
