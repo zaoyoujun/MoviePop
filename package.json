@@ -5,13 +5,13 @@
   "author": "MoviePop Team",
   "private": true,
   "type": "module",
-  "main": "../electron/main.js",
+  "main": "electron/main.js",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
     "electron:dev": "concurrently -k \"vite\" \"wait-on http://localhost:5173 && electron .\"",
-    "backend:build": "powershell -ExecutionPolicy Bypass -File scripts/build-backend.ps1",
+    "backend:build": "powershell -ExecutionPolicy Bypass -File backend/build-backend.ps1",
     "electron:build": "vite build && electron-builder",
     "electron:portable": "powershell -ExecutionPolicy Bypass -Command \"$env:NODE_TLS_REJECT_UNAUTHORIZED='0'; npm run backend:build; if ($?) { npm run build }; if ($?) { npx electron-builder --win portable }\""
   },
@@ -23,7 +23,7 @@
     },
     "files": [
       "dist/renderer/**/*",
-      "../electron/**/*",
+      "electron/**/*",
       "package.json"
     ],
     "asar": true,
@@ -35,15 +35,15 @@
     ],
     "win": {
       "target": "portable",
-      "icon": "build-resources/icon.ico"
+      "icon": "frontend/图标.ico"
     },
     "mac": {
       "target": "dmg",
-      "icon": "build-resources/icon.ico"
+      "icon": "frontend/图标.ico"
     },
     "linux": {
       "target": "AppImage",
-      "icon": "build-resources/icon.ico"
+      "icon": "frontend/图标.ico"
     },
     "nsis": {
       "oneClick": false,

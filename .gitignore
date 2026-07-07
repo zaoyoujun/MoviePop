@@ -1,18 +1,17 @@
-# Python
-__pycache__/
-*.py[cod]
-*.egg-info/
-
 # Node
 node_modules/
 
 # Build outputs
 dist/
 dist-ssr/
-frontend/build/
-frontend/build-*/
-frontend/backend-dist/
-frontend/backend-build/
+build/
+build-*/
+backend-dist/
+backend-build/
+
+# Frontend auto-generated files
+auto-imports.d.ts
+components.d.ts
 
 # IDE
 .idea/
@@ -20,6 +19,7 @@ frontend/backend-build/
 *.suo
 *.ntvs*
 *.sw?
+*.iml
 
 # OS
 .DS_Store
@@ -41,10 +41,16 @@ backend/covers/
 .qa-chrome-left-column/
 .qa-chrome-left-column-2/
 
-# Auto-generated files
-frontend/auto-imports.d.ts
-frontend/components.d.ts
-
 # Misc
 *.tsbuildinfo
 .eslintcache
+
+# Cypress
+/cypress/videos/
+/cypress/screenshots/
+
+# Vitest
+__screenshots__/
+
+# Vite
+*.timestamp-*-*.mjs

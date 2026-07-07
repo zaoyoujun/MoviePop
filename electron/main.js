@@ -15,7 +15,7 @@ const BACKEND_PORT = process.env.MOVIEPOP_BACKEND_PORT || '18987'
 
 const getIconPath = () => {
   const packagedIcon = join(process.resourcesPath, 'icon.ico')
-  const fallbackIcon = join(__dirname, '..', 'frontend', 'build-resources', 'icon.ico')
+  const fallbackIcon = join(__dirname, '..', 'frontend', '图标.ico')
   if (app.isPackaged && existsSync(packagedIcon)) return packagedIcon
   return fallbackIcon
 }
