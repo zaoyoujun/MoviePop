@@ -54,3 +54,17 @@ __screenshots__/
 
 # Vite
 *.timestamp-*-*.mjs
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.Python/
+
+# Player binaries
+backend/player/*.dll
+backend/player/vapoursynth/plugins/*.dll
+backend/player/vapoursynth/plugins/models/
+
+# OpenList
+backend/openlist/openlist.exe
