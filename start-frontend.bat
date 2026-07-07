@@ -4,13 +4,13 @@ echo         JMH-MoviePop Frontend Start Script
 echo ==============================================
 echo.
 
-set "FRONTEND_DIR=%~dp0frontend"
-set "NODE_MODULES=%FRONTEND_DIR%\node_modules"
+set "PROJECT_DIR=%~dp0"
+set "NODE_MODULES=%PROJECT_DIR%\node_modules"
 
 echo [1/2] Checking dependencies...
 if not exist "%NODE_MODULES%" (
     echo node_modules not found, installing dependencies...
-    cd /d "%FRONTEND_DIR%"
+    cd /d "%PROJECT_DIR%"
     call npm install
     if %errorlevel% neq 0 (
         echo Installation failed, please check network connection
@@ -24,7 +24,7 @@ if not exist "%NODE_MODULES%" (
 
 echo.
 echo [2/2] Starting frontend dev server...
-cd /d "%FRONTEND_DIR%"
+cd /d "%PROJECT_DIR%"
 start cmd /k "npm run dev"
 
 echo.
