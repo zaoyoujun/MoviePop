@@ -1116,7 +1116,7 @@ class CoverScraper:
                 if local_cover:
                     result["cover_url"] = local_cover
 
-            backdrop = self._tmdb_season_backdrop(season_details) or details.get("backdrop_path") or best.get("backdrop_path")
+            backdrop = details.get("backdrop_path") or best.get("backdrop_path") or self._tmdb_season_backdrop(season_details)
             if backdrop:
                 local_backdrop = self._download_cover(self._tmdb_image_url(backdrop, "backdrop"), title, season, chapter_name, part, "backdrop")
                 if local_backdrop:
