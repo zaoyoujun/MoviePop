@@ -1,4 +1,4 @@
-﻿import hashlib
+import hashlib
 import logging
 import os
 import re
@@ -275,8 +275,15 @@ class CoverScraper:
 
         if self._category_kind(category) == "anime":
             result = self._scrape_anibk(title, year, season, season_title, chapter_name, part)
-            if not self._has_metadata(result):
-                logger.debug("AniBK did not provide an exact anime result, trying Douban fallback: %s", title)
+            score = float(result.get("match_score") or 0)
+            is_special_type = bool(season_title and any(kw in season_title for kw in ["OVA", "OAD", "特别篇", "剧场版", "番外", "总集篇"]))
+            score_threshold = 50 if is_special_type else 40
+            
+            if not self._has_metadata(result) or score < score_threshold:
+                if self._has_metadata(result):
+                    logger.debug("AniBK match score %.1f below threshold %.1f, trying Douban fallback: %s", score, score_threshold, title)
+                else:
+                    logger.debug("AniBK did not provide an exact anime result, trying Douban fallback: %s", title)
                 result = self._scrape_douban(title, year, season, chapter_name, part)
                 if not self._has_metadata(result):
                     result = self._scrape_tmdb(title, year, season, category, season_title, aliases, origin_countries, chapter_name, part)
@@ -475,15 +482,21 @@ class CoverScraper:
             return result
         candidates.sort(key=lambda c: (c.get("match_score", 0), -int(c.get("_query_index") or 0)), reverse=True)
         best = candidates[0]
-        if float(best.get("match_score") or 0) < 30:
+        score = float(best.get("match_score") or 0)
+        
+        is_special_type = bool(season_title and any(kw in season_title for kw in ["OVA", "OAD", "特别篇", "剧场版", "番外", "总集篇"]))
+        threshold = 50 if is_special_type else 40
+        
+        if score < threshold:
             logger.debug(
-                "AniBK best candidate rejected: target=%s candidate=%s score=%s",
+                "AniBK best candidate rejected: target=%s candidate=%s score=%s threshold=%s",
                 title,
                 best.get("title", ""),
-                best.get("match_score", 0),
+                score,
+                threshold,
             )
             return result
-        logger.debug("AniBK matched title=%s", best["title"])
+        logger.debug("AniBK matched title=%s score=%s", best["title"], score)
         detail_url = best["url"]
 
         result["title"] = best["title"]
@@ -675,7 +688,6 @@ class CoverScraper:
         
         title_score = 0.0
         
-        # 鏍囬鍖归厤
         if target_title_lower == candidate_title:
             title_score = 70
         elif target_title_lower in candidate_title or candidate_title in target_title_lower:
@@ -684,13 +696,26 @@ class CoverScraper:
             target_tokens = set(re.findall(r"[\u4e00-\u9fff]{2,}|[a-z0-9]+", target_title_lower))
             candidate_tokens = set(re.findall(r"[\u4e00-\u9fff]{2,}|[a-z0-9]+", candidate_title))
             if target_tokens and candidate_tokens:
-                title_score = 45 * (len(target_tokens & candidate_tokens) / max(len(target_tokens | candidate_tokens), 1))
+                intersection = target_tokens & candidate_tokens
+                union = target_tokens | candidate_tokens
+                jaccard = len(intersection) / max(len(union), 1)
+                title_score = 45 * jaccard
+                
+                target_only_tokens = target_tokens - candidate_tokens
+                if target_only_tokens:
+                    penalty = len(target_only_tokens) * 8
+                    title_score = max(0, title_score - penalty)
         if title_score <= 0:
             return -30.0
 
         score = title_score
         
-        # 瀛暟鍖归厤
+        special_keywords = {"ova", "oad", "特别篇", "剧场版", "番外", "总集篇"}
+        target_has_special = any(kw in target_title_lower for kw in special_keywords)
+        candidate_has_special = any(kw in candidate_title for kw in special_keywords)
+        if target_has_special and not candidate_has_special:
+            score -= 30
+        
         candidate_season = self._extract_season(candidate_title)
         if target_season:
             if candidate_season == target_season:
@@ -797,7 +822,12 @@ class CoverScraper:
                 return result
 
             candidates.sort(key=lambda item: item.get("match_score", 0), reverse=True)
-            return self._scrape_douban_detail(candidates[0]["url"], title, year, season, candidates[0].get("match_score", 0), chapter_name, part)
+            best = candidates[0]
+            score = float(best.get("match_score") or 0)
+            if score < 40:
+                logger.debug("豆瓣 best candidate rejected: target=%s candidate=%s score=%s", title, best.get("title", ""), score)
+                return result
+            return self._scrape_douban_detail(best["url"], title, year, season, score, chapter_name, part)
         except Exception as e:
             logger.warning("豆瓣刮削失败: %s", e)
             return result

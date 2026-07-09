@@ -89,7 +89,7 @@
             <img :src="activeHero.poster" :alt="activeHero.title" />
           </div>
           <DetailEpisodes
-            v-if="detail.type === 'series' && detail.versions?.length"
+            v-if="detail.versions?.length > 0"
             v-model="currentVersion"
             :versions="detail.versions"
             :media-versions="detail.mediaVersions"
@@ -221,7 +221,7 @@
 </template>
 
 <script setup>
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   ChevronBack,
@@ -238,7 +238,7 @@ import DetailRecommend from '@/components/detail/DetailRecommend.vue'
 import Scrape from './Scrape.vue'
 
 import { startPlay } from '@/composables/usePlayer'
-import { addFavorite, removeFavorite } from '@/api/movie'
+import { addFavorite, getRecommendations, removeFavorite } from '@/api/movie'
 import { apiUrl } from '@/api/request'
 
 const route = useRoute()
@@ -404,12 +404,20 @@ const mockMovies = {
   }
 }
 
-const relatedMovies = [
-  { id: 'rel-1', title: '盗梦空间', year: 2010, category: '科幻', rating: 9.4, poster: 'https://images.unsplash.com/photo-1506744038136-46273834b3fb?w=400&q=80' },
-  { id: 'rel-2', title: '火星救援', year: 2015, category: '科幻', rating: 8.5, poster: 'https://images.unsplash.com/photo-1519608487953-e999c86e7455?w=400&q=80' },
-  { id: 'rel-3', title: '银翼杀手2049', year: 2017, category: '科幻', rating: 8.3, poster: 'https://images.unsplash.com/photo-1536440136628-849c177e76a1?w=400&q=80' },
-  { id: 'rel-4', title: '沙丘', year: 2021, category: '科幻', rating: 8.0, poster: 'https://images.unsplash.com/photo-1461151304267-38535e780c79?w=400&q=80' }
-]
+const relatedMovies = ref([])
+
+function normalizeRecommendItem(item) {
+  const category = item.category || '电影'
+  const genres = Array.isArray(item.genres) ? item.genres : []
+  return {
+    id: item.id,
+    title: item.title || '未命名',
+    year: item.year || '',
+    category: category === 'movie' && genres.length ? genres[0] : category,
+    rating: item.score || item.rating || '',
+    poster: item.coverUrl || item.posterUrl || item.poster || ''
+  }
+}
 
 const detail = ref(mockMovies['default'])
 const loading = ref(false)
@@ -421,6 +429,7 @@ async function fetchDetail() {
 
   loading.value = true
   loadError.value = ''
+  relatedMovies.value = []
 
   try {
     const response = await fetch(apiUrl(`/movies/${id}`))
@@ -429,6 +438,16 @@ async function fetchDetail() {
       if (result.code === 0 && result.data) {
         detail.value = normalizeDetail(result.data)
         isFavorite.value = detail.value.isFavorite || false
+
+        try {
+          const recommendations = await getRecommendations(id, 8)
+          relatedMovies.value = Array.isArray(recommendations)
+            ? recommendations.map(normalizeRecommendItem)
+            : []
+        } catch (err) {
+          console.error('[MovieDetail] 推荐加载失败:', err)
+          relatedMovies.value = []
+        }
         return
       }
     }
@@ -439,6 +458,7 @@ async function fetchDetail() {
   }
 
   detail.value = normalizeDetail(mockMovies[id] || mockMovies['default'])
+  relatedMovies.value = []
 }
 
 function normalizeDetail(data) {
@@ -546,6 +566,19 @@ function normalizeDetail(data) {
 }
 
 watch(() => route.params.id, () => { fetchDetail() }, { immediate: true })
+
+// 资源库扫描完成后，如果当前在详情页，自动刷新详情
+function handleScanCompleted() {
+  fetchDetail()
+}
+
+onMounted(() => {
+  window.addEventListener('scan:completed', handleScanCompleted)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('scan:completed', handleScanCompleted)
+})
 
 const heroImage = computed(() => {
   return activeHero.value.backdrop || activeHero.value.backdropUrl || detail.value.backdropUrl || detail.value.coverUrl || ''
@@ -818,12 +851,19 @@ function handlePlay() {
   if (d.type === 'series') {
     const currentVersionEpisodes = d.versions?.[currentVersion.value]?.episodes || []
     const ep = currentVersionEpisodes.find(e => e.progress < 90 && e.progress > 0) || currentVersionEpisodes[0]
+    
     if (!ep) {
-      showTipMessage('当前版本暂无可播放剧集')
-      isPlaying.value = false
-      return
+      const fallbackEpisodes = Array.isArray(d.episodes) ? d.episodes : []
+      const fallbackEp = fallbackEpisodes.find(e => e.progress < 90 && e.progress > 0) || fallbackEpisodes[0]
+      if (!fallbackEp) {
+        showTipMessage('当前版本暂无可播放剧集')
+        isPlaying.value = false
+        return
+      }
+      doPlayEpisode(fallbackEp, currentVersion.value)
+    } else {
+      doPlayEpisode(ep, currentVersion.value)
     }
-    doPlayEpisode(ep, currentVersion.value)
   } else {
     doPlayMovie(d)
   }
@@ -847,11 +887,16 @@ function handleVersionPlay(episode) {
 
   const versionIdx = episode.version || 0
   const versionEpisodes = d.versions?.[versionIdx]?.episodes || []
-  const ep = versionEpisodes.find(e => e.num === episode.episode) || versionEpisodes[episode.episode - 1]
+  let ep = versionEpisodes.find(e => e.num === episode.episode) || versionEpisodes[episode.episode - 1]
+  
   if (!ep) {
-    showTipMessage('找不到对应剧集')
-    isPlaying.value = false
-    return
+    const fallbackEpisodes = Array.isArray(d.episodes) ? d.episodes : []
+    ep = fallbackEpisodes.find(e => e.num === episode.episode) || fallbackEpisodes[episode.episode - 1]
+    if (!ep) {
+      showTipMessage('找不到对应剧集')
+      isPlaying.value = false
+      return
+    }
   }
   doPlayEpisode(ep, versionIdx)
 
@@ -872,7 +917,10 @@ function doPlayMovie(d) {
 
 function doPlayEpisode(ep, versionIdx) {
   const d = detail.value
-  const versionEpisodes = d.versions?.[versionIdx]?.episodes || []
+  let versionEpisodes = d.versions?.[versionIdx]?.episodes || []
+  if (!versionEpisodes.length && Array.isArray(d.episodes)) {
+    versionEpisodes = d.episodes
+  }
   const episodeList = versionEpisodes.map(e => ({
     id: e.episodeId || `${d.id}_ep${e.num}`,
     movieId: e.movieId || d.id,
@@ -942,10 +990,11 @@ function handleScrape() {
   showScrapeModal.value = true
 }
 
-function handleScrapeSuccess() {
+async function handleScrapeSuccess() {
   showTip.value = true
   tipMessage.value = '刮削成功'
   setTimeout(() => { showTip.value = false }, 3000)
+  await fetchDetail()
 }
 
 function goDetail(id) {

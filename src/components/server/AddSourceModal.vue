@@ -1,4 +1,4 @@
-﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿/**
+﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿/**
  * 娣诲姞鏁版嵁婧愬脊绐楃粍浠? *
  * 鍔熻兘锛? * 1. WebDAV 閰嶇疆琛ㄥ崟
  * 2. OpenList 閰嶇疆琛ㄥ崟
@@ -328,7 +328,7 @@
       <button class="verify-btn" @click="$emit('verify')" :disabled="verifying">
         {{ verifying ? '验证中...' : '测试连接' }}
       </button>
-      <button class="connect-btn" @click="$emit('submit')">添加</button>
+      <button class="connect-btn" @click="$emit('submit')">保存</button>
       <button class="cancel-btn" @click="isShow = false">取消</button>
     </div>
   </n-modal>

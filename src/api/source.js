@@ -44,6 +44,11 @@ export function rescanSource(id) {
   return post(`/sources/${id}/rescan`)
 }
 
+// 取消扫描
+export function cancelScan(id) {
+  return post(`/sources/${id}/scan/cancel`)
+}
+
 // 挂载 OpenList 网盘并添加为数据源
 export function mountOpenList(data) {
   return post('/sources/openlist/mount', data)

@@ -11,4 +11,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('window:maximized', listener)
     return () => ipcRenderer.removeListener('window:maximized', listener)
   },
+  extractVideoInfo: (url) => ipcRenderer.invoke('online:extract-video', url),
+  playVideo: (videoInfo) => ipcRenderer.invoke('online:play-video', videoInfo),
+  onVideoClick: (callback) => {
+    const listener = (_event, data) => callback(data)
+    ipcRenderer.on('online:video-click', listener)
+    return () => ipcRenderer.removeListener('online:video-click', listener)
+  },
 })

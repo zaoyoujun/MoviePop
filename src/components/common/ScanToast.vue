@@ -14,6 +14,7 @@
     >
       <div class="scan-toast-icon">
         <div v-if="toast.status === 'scanning'" class="scan-spinner"></div>
+        <div v-else-if="toast.status === 'cancelled'" class="scan-cancelled">&#10005;</div>
         <div v-else-if="toast.status === 'error'" class="scan-cross">!</div>
         <div v-else class="scan-check">&#10003;</div>
       </div>
@@ -22,7 +23,7 @@
         <div class="scan-toast-message">{{ toast.message }}</div>
         
         <!-- 扫描进度条 -->
-        <div v-if="toast.status === 'scanning'" class="scan-progress-container">
+        <div v-if="toast.status === 'scanning' || toast.status === 'cancelled'" class="scan-progress-container">
           <div class="scan-progress-bar">
             <div 
               class="scan-progress-fill" 
@@ -43,7 +44,15 @@
         </div> -->
       </div>
       <button
-        v-if="toast.status !== 'scanning'"
+        v-if="toast.status === 'scanning'"
+        class="scan-toast-cancel"
+        aria-label="取消扫描"
+        @click="cancelScan"
+      >
+        &#10005;
+      </button>
+      <button
+        v-else
         class="scan-toast-close"
         aria-label="关闭"
         @click="hideScanToast"
@@ -55,7 +64,7 @@
 </template>
 
 <script setup>
-import { scanToast, hideScanToast } from '@/composables/useScanToast'
+import { scanToast, hideScanToast, cancelScan } from '@/composables/useScanToast'
 const toast = scanToast
 </script>
 
@@ -86,6 +95,11 @@ const toast = scanToast
 .scan-toast-error {
   border-color: rgba(255, 99, 132, 0.6);
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4), 0 0 24px rgba(255, 99, 132, 0.3);
+}
+
+.scan-toast-cancelled {
+  border-color: rgba(255, 170, 80, 0.6);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4), 0 0 24px rgba(255, 170, 80, 0.2);
 }
 
 .scan-toast-icon {
@@ -140,6 +154,20 @@ const toast = scanToast
   height: 28px;
   border-radius: 50%;
   background: linear-gradient(135deg, #ff6384, #ff3b5c);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: bold;
+  font-size: 16px;
+  animation: scan-pop 0.3s ease-out;
+}
+
+.scan-cancelled {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #ffaa50, #ff8c42);
   color: #fff;
   display: flex;
   align-items: center;
@@ -207,6 +235,26 @@ const toast = scanToast
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* 取消按钮（仅在扫描中显示） */
+.scan-toast-cancel {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  border: none;
+  background: rgba(255, 99, 132, 0.16);
+  color: #ff6384;
+  border-radius: 50%;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.scan-toast-cancel:hover {
+  background: rgba(255, 99, 132, 0.28);
+  color: #ff809f;
 }
 
 /* 关闭按钮（仅在非扫描中显示） */

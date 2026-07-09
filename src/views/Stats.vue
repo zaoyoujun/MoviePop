@@ -186,6 +186,7 @@
               <span>{{ movie.category || '影视' }} / {{ getProgress(movie) }}%</span>
             </div>
           </article>
+          <div v-if="!recentHistory.length" class="history-empty">暂无观看记录</div>
         </div>
       </section>
     </template>
@@ -573,7 +574,7 @@ const fallbackStats = {
     { label: '史诗', percent: 52 },
     { label: '黑色幽默', percent: 28 }
   ],
-  recentHistory: MOCK_DATA.history
+  recentHistory: []
 }
 
 function animateWave() {
@@ -1215,6 +1216,14 @@ p {
   margin-top: 4px;
   color: rgba(248, 243, 233, 0.52);
   font-size: 11px;
+}
+
+.history-empty {
+  grid-column: 1 / -1;
+  padding: 24px 0;
+  text-align: center;
+  color: rgba(248, 243, 233, 0.4);
+  font-size: 13px;
 }
 
 @media (max-width: 1080px) {

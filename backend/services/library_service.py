@@ -1,4 +1,4 @@
-﻿"""
+"""
 电影库管理服务
 封装电影/剧集的缓存加载、统计计算、API 格式转换等业务逻辑
 """
@@ -77,6 +77,7 @@ CATEGORY_API_MAPPING = {
     "电视剧": "series",
     "剧集": "series",
     "电影": "movie",
+    "在线": "online",
 }
 
 EPISODE_MOVIE_SEPARATOR = "::"
@@ -85,6 +86,32 @@ EPISODE_MOVIE_SEPARATOR = "::"
 def _api_category(category: Any) -> str:
     value = str(category or "movie").strip()
     return CATEGORY_API_MAPPING.get(value, value.lower())
+
+
+def _api_categories(movie: dict) -> list[str]:
+    primary_category = _api_category(movie.get("category"))
+    categories = {primary_category}
+    
+    genres = _as_list(movie.get("genres"))
+    has_animation_genre = any(
+        str(g).lower() in {"animation", "动画", "アニメ", "anime", "动漫"}
+        for g in genres
+    )
+    
+    media_type = str(movie.get("media_type") or "").lower()
+    is_animation_type = media_type == "动画"
+    
+    tmdb_media_type = str(movie.get("tmdb_media_type") or "").lower()
+    
+    has_animation = has_animation_genre or is_animation_type
+    
+    if primary_category == "movie" and has_animation:
+        categories.add("anime")
+    elif primary_category == "anime":
+        if tmdb_media_type == "movie" or media_type == "电影":
+            categories.add("movie")
+    
+    return sorted(list(categories))
 
 
 def _identity_text(value: Any) -> str:
@@ -108,8 +135,13 @@ def _resource_group_key(movie: dict) -> str:
     source_id = str(movie.get("source_id") or "")
     category = _api_category(movie.get("category"))
     base = f"{source_id}::{category}::{identity or movie.get('id') or movie.get('title')}"
-    if category == "movie":
-        return base
+    
+    tmdb_media_type = str(movie.get("tmdb_media_type") or "").lower()
+    is_movie_type = tmdb_media_type == "movie"
+    
+    if category == "movie" or is_movie_type:
+        movie_title = _identity_text(movie.get("title") or movie.get("id"))
+        return f"{base}::{movie_title}"
 
     special_type = str(movie.get("special_type") or "").strip()
     if special_type:
@@ -201,6 +233,41 @@ def _related_movies_for_detail(movie: dict) -> list[dict]:
         str(item.get("title") or ""),
     ))
     return related
+
+
+def get_recommendations(movie_id: str, limit: int = 12) -> list[dict]:
+    movie = get_movie_by_id(movie_id)
+    if not movie:
+        return []
+
+    library = load_library()
+    movie_identity = _series_identity(movie)
+    movie_category = _api_category(movie.get("category"))
+    exclude_ids = {str(movie.get("id") or "")}
+
+    recommendations = []
+
+    if movie_identity:
+        for item in library:
+            if str(item.get("id") or "") in exclude_ids:
+                continue
+            if _series_identity(item) == movie_identity:
+                recommendations.append(item)
+                exclude_ids.add(str(item.get("id") or ""))
+                if len(recommendations) >= limit:
+                    return [movie_to_api_format(r) for r in recommendations]
+
+    if movie_category:
+        for item in library:
+            if str(item.get("id") or "") in exclude_ids:
+                continue
+            if _api_category(item.get("category")) == movie_category:
+                recommendations.append(item)
+                exclude_ids.add(str(item.get("id") or ""))
+                if len(recommendations) >= limit:
+                    return [movie_to_api_format(r) for r in recommendations]
+
+    return [movie_to_api_format(r) for r in recommendations]
 
 
 def _split_episode_movie_id(episode_id: Optional[str]) -> tuple[str, str]:
@@ -517,17 +584,31 @@ def movie_to_api_format(movie: dict) -> dict:
     languages = _as_list(movie.get("languages"))
     merged_tags = _merge_unique_labels(movie.get("tags"), genres, countries)
 
+    parsed_type = str(movie.get("type") or "").lower()
+    media_type = str(movie.get("media_type") or "").lower()
+    
+    if parsed_type:
+        is_series = parsed_type == "series"
+    elif media_type == "电影":
+        is_series = False
+    elif media_type == "剧集":
+        is_series = True
+    else:
+        is_series = category in {"series", "tv"}
+    
     item = {
         "id": movie_id,
         "title": display_title,
         "localTitle": local_title,
         "matchedTitle": matched_title,
+        "type": "series" if is_series else "movie",
         "versionTitle": movie.get("version_title", ""),
         "variantCount": movie.get("variant_count", 1),
         "hasVersions": bool(movie.get("has_versions") or movie.get("version_title")),
         "seasonCount": movie.get("season_count", 1),
         "alias": movie.get("alias", []) if isinstance(movie.get("alias"), list) else [],
         "category": category,
+        "categories": _api_categories(movie),
         "year": movie.get("year", movie.get("year_hint", 0)),
         "sourceType": source_type,
         "sourceName": movie.get("source_name", ""),
@@ -790,6 +871,11 @@ def resolve_play_url(movie: dict, episode_id: Optional[str], sources: list, refr
         )
         file_path, headers = _resolve_openlist_play_url(file_path, source, refresh=refresh)
 
+    if source_type == "online":
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+        }
+
     return file_path, headers
 
 
@@ -942,7 +1028,11 @@ def _resolve_webdav_source_base_url(source: dict) -> str:
 def build_home_data(movies: list, category: Optional[str], limit: int) -> dict:
     """构建首页数据"""
     if category and category != "all":
-        movies = [m for m in movies if _api_category(m.get("category")) == str(category).lower()]
+        target_category = str(category).lower()
+        movies = [
+            m for m in movies
+            if target_category in _api_categories(m)
+        ]
     movies = _collapse_home_movies(movies)
 
     stats = compute_home_stats(movies)

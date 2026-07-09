@@ -5,13 +5,14 @@
  * 切换路由不会丢失；将 <ScanToast /> 挂载在路由之外即可跨页常驻。
  */
 import { reactive } from 'vue'
+import { cancelScan as apiCancelScan } from '@/api/source'
 
 /**
  * 共享状态（模块单例）
  * - visible: 是否显示
  * - id:      当前数据源 ID
  * - message: 状态文本
- * - status:  scanning | done | error
+ * - status:  scanning | done | error | cancelled
  * - progress: 扫描进度（0-100）
  * - currentFile: 当前正在处理的文件
  * - totalFiles: 总文件数
@@ -28,6 +29,27 @@ export const scanToast = reactive({
   processedFiles: 0
 })
 
+// 标记扫描是否已完成（用于跨页面刷新首页）
+let pendingScanCompleted = false
+
+function markScanCompleted() {
+  pendingScanCompleted = true
+  window.dispatchEvent(new CustomEvent('scan:completed'))
+}
+
+export function consumeScanCompleted() {
+  const value = pendingScanCompleted
+  pendingScanCompleted = false
+  return value
+}
+
+// 标记用户是否已主动取消扫描（用于前端停止轮询覆盖）
+let userCancelled = false
+
+export function isUserCancelled() {
+  return userCancelled
+}
+
 /**
  * 显示 / 刷新扫描进度 Toast
  * @param {string} id       数据源 ID
@@ -36,6 +58,11 @@ export const scanToast = reactive({
  * @param {Object} options  额外选项（progress, currentFile, totalFiles, processedFiles）
  */
 export function showScanToast(id, message, status = 'scanning', options = {}) {
+  // 新扫描开始时重置用户取消标记
+  if (scanToast.id !== id) {
+    userCancelled = false
+  }
+
   scanToast.visible = true
   scanToast.id = id
   scanToast.message = message
@@ -46,7 +73,7 @@ export function showScanToast(id, message, status = 'scanning', options = {}) {
   scanToast.processedFiles = options.processedFiles || 0
 
   if (status === 'done') {
-    window.dispatchEvent(new CustomEvent('scan:completed'))
+    markScanCompleted()
   }
 }
 
@@ -65,7 +92,28 @@ export function updateScanToast(message, status, options = {}) {
   if (options.processedFiles !== undefined) scanToast.processedFiles = options.processedFiles
 
   if (status === 'done') {
-    window.dispatchEvent(new CustomEvent('scan:completed'))
+    markScanCompleted()
+  }
+}
+
+/**
+ * 取消当前扫描
+ */
+export async function cancelScan() {
+  const id = scanToast.id
+  if (!id || scanToast.status !== 'scanning') return
+
+  userCancelled = true
+  scanToast.message = '正在取消扫描...'
+  try {
+    await apiCancelScan(id)
+    scanToast.status = 'cancelled'
+    scanToast.message = '扫描已取消'
+    window.dispatchEvent(new CustomEvent('scan:cancelled'))
+  } catch (error) {
+    userCancelled = false
+    scanToast.status = 'error'
+    scanToast.message = error instanceof Error ? error.message : '取消扫描失败'
   }
 }
 

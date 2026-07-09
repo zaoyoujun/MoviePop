@@ -11,6 +11,17 @@ const __dirname = dirname(__filename)
 let mainWindow
 let backendProcess
 
+function isVideoUrl(url) {
+  return url.includes('/v/') || 
+         url.includes('/p/') || 
+         url.includes('/video/') || 
+         url.includes('/play/') ||
+         url.includes('.mp4') || 
+         url.includes('.m3u8') ||
+         url.includes('.flv') ||
+         url.includes('.ts')
+}
+
 const BACKEND_PORT = process.env.MOVIEPOP_BACKEND_PORT || '18987'
 
 const getIconPath = () => {
@@ -133,6 +144,53 @@ const createWindow = () => {
     mainWindow.webContents.openDevTools()
   }
 
+  mainWindow.webContents.on('new-window', (event, url) => {
+    event.preventDefault()
+    
+    if (isVideoUrl(url)) {
+      mainWindow.webContents.send('online:video-click', { url })
+    } else {
+      mainWindow.loadURL(url)
+    }
+  })
+
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    const parsedUrl = new URL(url)
+    const allowedHosts = ['localhost', '127.0.0.1']
+    
+    if (!allowedHosts.includes(parsedUrl.hostname)) {
+      if (isVideoUrl(url)) {
+        event.preventDefault()
+        mainWindow.webContents.send('online:video-click', { url })
+      } else {
+        event.preventDefault()
+        mainWindow.loadURL(url)
+      }
+    }
+  })
+
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (isVideoUrl(url)) {
+      mainWindow.webContents.send('online:video-click', { url })
+      return { action: 'deny' }
+    }
+    return {
+      action: 'allow',
+      overrideBrowserWindowOptions: {
+        frame: true,
+        parent: mainWindow,
+        modal: true,
+        width: 1200,
+        height: 800,
+        webPreferences: {
+          nodeIntegration: false,
+          contextIsolation: true,
+          preload: join(__dirname, 'preload.cjs'),
+        },
+      },
+    }
+  })
+
   mainWindow.on('maximize', () => {
     mainWindow.webContents.send('window:maximized', true)
   })
@@ -196,4 +254,20 @@ ipcMain.handle('window:close', () => {
 
 ipcMain.handle('window:is-maximized', () => {
   return mainWindow ? mainWindow.isMaximized() : false
+})
+
+ipcMain.handle('online:extract-video', async (_event, url) => {
+  try {
+    const response = await fetch(`http://127.0.0.1:${BACKEND_PORT}/api/online/browse?url=${encodeURIComponent(url)}`)
+    return await response.json()
+  } catch (error) {
+    return { error: error.message }
+  }
+})
+
+ipcMain.handle('online:play-video', (_event, videoInfo) => {
+  if (mainWindow) {
+    mainWindow.webContents.send('online:play-video', videoInfo)
+  }
+  return { success: true }
 })

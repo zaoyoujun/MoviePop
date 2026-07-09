@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """FastAPI routes for JMH-MoviePop."""
 from __future__ import annotations
 
@@ -406,6 +406,15 @@ async def rescan_source(source_id: str):
     return api_response(data={"source": source_service.safe_source(source), "scanStatus": status})
 
 
+@router.post("/api/sources/{source_id}/scan/cancel")
+async def cancel_scan_source(source_id: str):
+    source = _find_source(source_id)
+    if not source:
+        return api_response(code=404, message="Data source not found")
+    success = scan_service.cancel_scan(source_id)
+    return api_response(data={"cancelled": success})
+
+
 @router.get("/api/openlist/status")
 async def get_openlist_status():
     AppConfig = _get_app_config_class()
@@ -550,7 +559,7 @@ async def add_openlist_source(request: Request):
             "host": "127.0.0.1",
             "port": str(ready_data.get("port") or ""),
             "protocol": "http",
-            "selected_paths": selected_paths,
+            "selected_paths": selected_paths or [mount_path],
             "active": True,
             "tint": source_service.random_tint(),
             "stats": _empty_stats(),
@@ -597,7 +606,11 @@ async def list_movies(
 ):
     movies = lib.load_library()
     if category and category != "all":
-        movies = [m for m in movies if lib.movie_to_api_format(m).get("category") == category.lower()]
+        target_category = category.lower()
+        movies = [
+            m for m in movies
+            if target_category in lib._api_categories(m)
+        ]
     if keyword:
         needle = keyword.lower()
         movies = [m for m in movies if needle in str(m.get("title", "")).lower() or needle in str(m.get("name", "")).lower()]
@@ -803,6 +816,15 @@ async def get_movie_detail(movie_id: str):
     except Exception as exc:
         logger.debug("Record detail view failed: movie=%s error=%s", movie_id, exc)
     return api_response(data=lib.movie_to_detail(movie))
+
+
+@router.get("/api/movies/{movie_id}/recommendations")
+async def get_movie_recommendations(movie_id: str, limit: int = 12):
+    movie = lib.get_movie_by_id(movie_id)
+    if not movie:
+        return api_response(code=404, message="Movie not found")
+    recommendations = lib.get_recommendations(movie_id, limit)
+    return api_response(data=recommendations)
 
 
 @router.post("/api/movies/{movie_id}/favorite")
@@ -1237,6 +1259,75 @@ async def player_control_noop():
 @router.get("/api/player/status")
 async def player_status():
     return api_response(data={"running": player.get_player().is_running()})
+
+
+def _get_online_extractor():
+    try:
+        from backend.core.online_extractor import browse_site, extract_video_detail, generate_online_movie_entry
+    except ImportError:
+        from core.online_extractor import browse_site, extract_video_detail, generate_online_movie_entry
+    return browse_site, extract_video_detail, generate_online_movie_entry
+
+
+@router.post("/api/online/browse")
+async def online_browse(request: Request):
+    body = await _parse_request_body(request)
+    url = str(body.get("url") or "").strip()
+    if not url:
+        return api_response(code=400, message="Missing URL")
+    if not url.startswith(("http://", "https://")):
+        url = "https://" + url
+    browse_site, _, _ = _get_online_extractor()
+    result = browse_site(url)
+    if result.get("error"):
+        return api_response(code=400, message=result["error"], data=result)
+    return api_response(data=result)
+
+
+@router.post("/api/online/detail")
+async def online_detail(request: Request):
+    body = await _parse_request_body(request)
+    url = str(body.get("url") or "").strip()
+    if not url:
+        return api_response(code=400, message="Missing URL")
+    if not url.startswith(("http://", "https://")):
+        url = "https://" + url
+    _, extract_video_detail, _ = _get_online_extractor()
+    result = extract_video_detail(url)
+    if result.get("error"):
+        return api_response(code=400, message=result["error"], data=result)
+    return api_response(data=result)
+
+
+@router.post("/api/online/add")
+async def online_add(request: Request):
+    body = await _parse_request_body(request)
+    video_info = body.get("video")
+    if not isinstance(video_info, dict):
+        return api_response(code=400, message="Invalid video info")
+    
+    _, _, generate_online_movie_entry = _get_online_extractor()
+    movie_entry = generate_online_movie_entry(video_info)
+    
+    movies = lib.load_library()
+    existing = next((m for m in movies if m.get("id") == movie_entry["id"]), None)
+    if existing:
+        return api_response(code=400, message="Video already added")
+    
+    movies.append(movie_entry)
+    lib.save_library(movies)
+    return api_response(data=lib.movie_to_api_format(movie_entry))
+
+
+@router.delete("/api/online/{video_id}")
+async def online_remove(video_id: str):
+    movies = lib.load_library()
+    before = len(movies)
+    movies = [m for m in movies if m.get("source_type") != "online" or m.get("id") != video_id]
+    if len(movies) == before:
+        return api_response(code=404, message="Video not found")
+    lib.save_library(movies)
+    return api_response(data={"deleted": True})
 
 
 async def _parse_request_body(request: Request) -> dict[str, Any]:
@@ -2238,7 +2329,7 @@ def _normalize_mount_path(value: Any) -> str:
 def _openlist_selected_paths(paths: list[str], mount_path: str) -> list[str]:
     mount = _normalize_mount_path(mount_path)
     if not paths:
-        return [mount]
+        return []
 
     result = []
     for raw_path in paths:
@@ -2256,7 +2347,7 @@ def _openlist_selected_paths(paths: list[str], mount_path: str) -> list[str]:
             normalized = mount.rstrip("/") + path
         if normalized not in result:
             result.append(normalized)
-    return result or [mount]
+    return result or []
 
 
 def _label_to_driver(label: str) -> str:

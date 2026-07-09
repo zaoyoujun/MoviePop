@@ -1,4 +1,4 @@
-﻿"""Viewing-personality analytics and behavior event collection."""
+"""Viewing-personality analytics and behavior event collection."""
 from __future__ import annotations
 
 import math

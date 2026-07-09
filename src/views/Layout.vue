@@ -88,9 +88,10 @@
 </template>
 
 <script setup>
-import { computed, h, ref } from 'vue'
+import { computed, h, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { NIcon } from 'naive-ui'
+import { getHomeData } from '@/api/movie'
 import {
   AlbumsOutline,
   BarChartOutline,
@@ -112,11 +113,38 @@ import {
 const router = useRouter()
 const route = useRoute()
 const collapsed = ref(false)
+const availableCategories = ref(new Set())
 
 const activeKey = computed(() => route.name)
 const categoryKey = computed(() =>
   route.name === 'Home' ? route.query.category || 'all' : null
 )
+
+async function loadAvailableCategories() {
+  try {
+    const data = await getHomeData({ limit: '1000' })
+    const items = Array.isArray(data?.items) ? data.items : []
+    const categories = new Set()
+    items.forEach(item => {
+      if (Array.isArray(item.categories)) {
+        item.categories.forEach(cat => categories.add(cat))
+      } else if (item.category) {
+        categories.add(item.category)
+      }
+    })
+    availableCategories.value = categories
+  } catch (error) {
+    console.error('加载分类失败', error)
+    availableCategories.value = new Set()
+  }
+}
+
+onMounted(loadAvailableCategories)
+watch(() => route.name, (name) => {
+  if (name === 'Home') {
+    loadAvailableCategories()
+  }
+})
 
 function renderIcon(icon) {
   return () => h(NIcon, null, { default: () => h(icon) })
@@ -150,11 +178,16 @@ const movieCategories = [
   { label: '纪录', key: 'documentary', icon: AlbumsOutline }
 ]
 
-const categoryMenuOptions = movieCategories.map((item) => ({
-  label: item.label,
-  key: item.key,
-  icon: renderIcon(item.icon)
-}))
+const categoryMenuOptions = computed(() => {
+  return movieCategories.filter((item) => {
+    if (item.key === 'all') return true
+    return availableCategories.value.has(item.key)
+  }).map((item) => ({
+    label: item.label,
+    key: item.key,
+    icon: renderIcon(item.icon)
+  }))
+})
 
 const bottomMenuOptions = [
   { label: '服务器', key: 'Server', icon: renderIcon(ServerOutline) },
@@ -185,6 +218,10 @@ const bottomMenuOptions = [
 .movie-sider :deep(.n-layout-sider-scroll-container) {
   height: 100%;
   overflow: hidden !important;
+}
+
+.movie-sider :deep(.n-scrollbar-content) {
+  height: 100%;
 }
 
 .sider-frame {

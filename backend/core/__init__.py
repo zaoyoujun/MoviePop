@@ -1,4 +1,4 @@
-﻿"""
+"""
 Core modules for JMH-MoviePop backend
 """
 from .openlist_manager import openlist_manager, openlist_binary_manager, OpenListManager, OpenListBinaryManager

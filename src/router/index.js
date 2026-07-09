@@ -45,6 +45,12 @@ const routes = [
     component: () => import('@/views/MovieDetail.vue'),
     meta: { title: '影视详情' }
   },
+  {
+    path: '/online',
+    name: 'Online',
+    component: () => import('@/views/Online.vue'),
+    meta: { title: '在线浏览' }
+  },
   ]
 
 const router = createRouter({

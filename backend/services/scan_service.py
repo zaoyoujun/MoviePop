@@ -7,7 +7,7 @@ import os
 import re
 import threading
 from datetime import datetime
-from typing import Any
+from typing import Any, Optional
 
 try:
     from backend.config import AppConfig
@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 _status_lock = threading.Lock()
 _scan_threads: dict[str, threading.Thread] = {}
 _statuses: dict[str, dict[str, Any]] = {}
+_cancel_events: dict[str, threading.Event] = {}
 _source_probe_logged = False
 
 LOCKED_METADATA_FIELDS = (
@@ -125,6 +126,15 @@ def get_status(source_id: str) -> dict[str, Any]:
         }))
 
 
+def cancel_scan(source_id: str) -> bool:
+    with _status_lock:
+        event = _cancel_events.get(source_id)
+        if not event:
+            return False
+        event.set()
+        return True
+
+
 def start_background_scan(source_id: str) -> dict[str, Any]:
     with _status_lock:
         thread = _scan_threads.get(source_id)
@@ -142,6 +152,7 @@ def start_background_scan(source_id: str) -> dict[str, Any]:
             "finishedAt": "",
         }
 
+        _cancel_events[source_id] = threading.Event()
         thread = threading.Thread(target=_scan_worker, args=(source_id,), daemon=True)
         _scan_threads[source_id] = thread
         thread.start()
@@ -152,6 +163,11 @@ def _set_status(source_id: str, **updates: Any) -> None:
     with _status_lock:
         current = _statuses.setdefault(source_id, {})
         current.update(updates)
+
+
+def _is_cancelled(source_id: str) -> bool:
+    event = _cancel_events.get(source_id)
+    return event.is_set() if event else False
 
 
 def _scan_worker(source_id: str) -> None:
@@ -172,6 +188,7 @@ def _scan_worker(source_id: str) -> None:
             thread = _scan_threads.get(source_id)
             if thread and not thread.is_alive():
                 _scan_threads.pop(source_id, None)
+            _cancel_events.pop(source_id, None)
 
 
 def _scan_source(source_id: str) -> None:
@@ -182,6 +199,19 @@ def _scan_source(source_id: str) -> None:
 
     _set_status(source_id, stage="scan", current=source.get("name", ""))
     files = _collect_video_files(source)
+    if _is_cancelled(source_id):
+        _set_status(
+            source_id,
+            scanning=False,
+            stage="cancelled",
+            current="",
+            processed=0,
+            total=0,
+            error="扫描已取消",
+            finishedAt=_now_iso(),
+        )
+        return
+
     _set_status(source_id, stage="parse", total=len(files), processed=0)
 
     previous_library = library_service.load_library()
@@ -200,6 +230,8 @@ def _scan_source(source_id: str) -> None:
         if scraper is None:
             auto_scrape = False
     for index, movie in enumerate(movies, start=1):
+        if _is_cancelled(source_id):
+            break
         _set_status(
             source_id,
             current=movie.get("title", ""),
@@ -230,16 +262,29 @@ def _scan_source(source_id: str) -> None:
 
     stats = library_service.compute_stats(enriched)
     _update_source_after_scan(source_id, stats=stats, scan_error="")
-    _set_status(
-        source_id,
-        scanning=False,
-        stage="done",
-        current="",
-        processed=len(enriched),
-        total=len(enriched),
-        error="",
-        finishedAt=_now_iso(),
-    )
+
+    if _is_cancelled(source_id):
+        _set_status(
+            source_id,
+            scanning=False,
+            stage="cancelled",
+            current="",
+            processed=len(enriched),
+            total=len(movies),
+            error="扫描已取消",
+            finishedAt=_now_iso(),
+        )
+    else:
+        _set_status(
+            source_id,
+            scanning=False,
+            stage="done",
+            current="",
+            processed=len(enriched),
+            total=len(enriched),
+            error="",
+            finishedAt=_now_iso(),
+        )
 
 
 def _copy_locked_metadata(target: dict[str, Any], source: dict[str, Any]) -> None:
@@ -251,15 +296,18 @@ def _copy_locked_metadata(target: dict[str, Any], source: dict[str, Any]) -> Non
 def _collect_video_files(source: dict[str, Any]) -> list[str]:
     source_type = source.get("type")
     selected_paths = _selected_paths(source)
+    source_id = source.get("id", "")
 
     if source_type == "local":
         config = AppConfig()
         config.load_config()
         scanner = LocalScanner(max_depth=int(config.LOCAL_SCAN_MAX_DEPTH or 3))
-        roots = selected_paths or [source.get("path", "")]
+        roots = selected_paths if selected_paths is not None else [source.get("path", "")]
         files: list[str] = []
         for root in roots:
-            _set_status(source.get("id", ""), current=root)
+            if _is_cancelled(source_id):
+                break
+            _set_status(source_id, current=root)
             files.extend(scanner.scan_directory(root))
         return _dedupe(files)
 
@@ -271,22 +319,24 @@ def _collect_video_files(source: dict[str, Any]) -> list[str]:
             username=source.get("username", ""),
             password=source.get("password", ""),
         )
-        roots = selected_paths or ["/"]
+        roots = selected_paths if selected_paths is not None else ["/"]
         files = []
         for root in roots:
+            if _is_cancelled(source_id):
+                break
             files.extend(client.list_files_recursive(root, max_depth=int(config.SCAN_MAX_DEPTH or 2)))
         return _dedupe(files)
 
     if source_type == "openlist":
         config = AppConfig()
         config.load_config()
-        roots = selected_paths or [source.get("mount_path", "/")]
-        return _scan_openlist_roots(roots)
+        roots = selected_paths if selected_paths is not None else [source.get("mount_path", "/")]
+        return _scan_openlist_roots(roots, source_id)
 
     return []
 
 
-def _scan_openlist_roots(roots: list[str]) -> list[str]:
+def _scan_openlist_roots(roots: list[str], source_id: str = "") -> list[str]:
     try:
         from backend.config import AppConfig
         from backend.core.openlist_client import openlist_client
@@ -316,6 +366,8 @@ def _scan_openlist_roots(roots: list[str]) -> list[str]:
     queue: list[tuple[str, int]] = [(root if root.startswith("/") else f"/{root}", 0) for root in roots if root]
 
     while queue:
+        if _is_cancelled(source_id):
+            break
         path, depth = queue.pop(0)
         if path in seen_dirs:
             continue
@@ -356,8 +408,10 @@ def _openlist_entry_path(parent: str, entry: dict[str, Any]) -> str:
     return f"{base}/{name}".replace("//", "/")
 
 
-def _selected_paths(source: dict[str, Any]) -> list[str]:
-    paths = source.get("selected_paths", [])
+def _selected_paths(source: dict[str, Any]) -> Optional[list[str]]:
+    if "selected_paths" not in source:
+        return None
+    paths = source["selected_paths"]
     if isinstance(paths, list):
         return [str(path).strip() for path in paths if str(path).strip()]
     if isinstance(paths, str):
@@ -579,6 +633,34 @@ def _scrape_metadata(source_id: str, movies: list[dict[str, Any]], scraper: Any 
             ):
                 if meta.get(key):
                     movie[key] = meta[key]
+            
+            media_type = str(meta.get("tmdb_media_type") or "").strip().lower()
+            genres = meta.get("genres") or []
+            if media_type:
+                if media_type == "tv":
+                    has_animation = any(
+                        str(g).lower() in {"animation", "动画", "アニメ"}
+                        for g in genres
+                    )
+                    has_anime_keyword = any(
+                        str(g).lower() in {"anime", "动漫"}
+                        for g in genres
+                    )
+                    if has_animation or has_anime_keyword:
+                        movie["category"] = "动漫"
+                    else:
+                        movie["category"] = "电视剧"
+                    movie["is_series"] = True
+                elif media_type == "movie":
+                    has_animation = any(
+                        str(g).lower() in {"animation", "动画", "アニメ"}
+                        for g in genres
+                    )
+                    if has_animation:
+                        movie["category"] = "动漫"
+                    else:
+                        movie["category"] = "电影"
+                    movie["is_series"] = False
         except Exception as exc:
             logger.warning("刮削失败：%s error=%s", movie.get("title", ""), exc)
         finally:

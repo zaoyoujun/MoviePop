@@ -15,16 +15,8 @@
       </button>
     </section>
 
-    <section class="category-bar">
-      <div
-        v-for="cat in categoryOptions"
-        :key="cat.value"
-        class="category-item"
-        :class="{ active: currentCategory === cat.value }"
-        @click="setCategory(cat.value)"
-      >
-        {{ cat.label }}
-      </div>
+    <section v-if="currentCategory === 'online'" class="online-section">
+      <OnlineBrowser />
     </section>
 
     <HomeHero
@@ -67,10 +59,12 @@ import {
   Search
 } from '@vicons/ionicons5'
 import { HomeHero, HomeMediaList } from '@/components/home'
+import OnlineBrowser from '@/components/online/OnlineBrowser.vue'
 import { MOCK_DATA } from '@/api/mockData'
 import { startPlay } from '@/composables/usePlayer'
-import { addFavorite, getHomeData, removeFavorite } from '@/api/movie'
+import { addFavorite, getHistory, getHomeData, removeFavorite } from '@/api/movie'
 import { saveScrollPosition, scheduleScrollRestore } from '@/utils/scrollRestoration'
+import { consumeScanCompleted } from '@/composables/useScanToast'
 
 defineOptions({ name: 'Home' })
 
@@ -80,27 +74,19 @@ const router = useRouter()
 const loading = ref(false)
 const loadError = ref('')
 const keyword = ref('')
+const continueHistory = ref([])
 const homeData = ref({
   stats: { total: 0, remote: 0, local: 0, favorite: 0 },
   hero: [],
   items: []
 })
 
-const categoryOptions = [
-  { label: '全部', value: 'all' },
-  { label: '电影', value: 'movie' },
-  { label: '剧集', value: 'series' },
-  { label: '动漫', value: 'anime' },
-  { label: '4K', value: '4k' },
-  { label: '未观看', value: 'unwatched' },
-  { label: '已观看', value: 'watched' }
-]
-
 const categoryLabels = {
   all: '全部',
   movie: '电影',
   series: '剧集',
   anime: '动漫',
+  online: '在线',
   variety: '综艺',
   music: '音乐',
   shorts: '短片',
@@ -134,6 +120,7 @@ const rawVisibleItems = computed(() => {
       (category === '4k' && String(item.quality || item.tags || '').toLowerCase().includes('4k')) ||
       (category === 'unwatched' && !Number(item.progress?.percent || item.progress || 0)) ||
       (category === 'watched' && Number(item.progress?.percent || item.progress || 0) >= 90) ||
+      (category === 'online' && item.source_type === 'online') ||
       item.category === category
     const text = `${item.title || ''} ${item.sourceName || ''} ${item.year || ''}`.toLowerCase()
     return matchCategory && (!key || text.includes(key))
@@ -141,9 +128,8 @@ const rawVisibleItems = computed(() => {
 })
 
 const visibleCards = computed(() => rawVisibleItems.value.map((item, index) => normalizeMovieCard(item, index)))
-const continueCards = computed(() => 
-  rawVisibleItems.value
-    .filter(item => Number(item.progress?.percent || item.progress || 0) > 0)
+const continueCards = computed(() =>
+  continueHistory.value
     .slice(0, 6)
     .map(item => normalizeMovieCard(item))
 )
@@ -164,12 +150,16 @@ async function fetchHomeData() {
     const params = new URLSearchParams({ limit: '200' })
     if (currentCategory.value !== 'all') params.set('category', currentCategory.value)
 
-    const data = await getHomeData(Object.fromEntries(params.entries()))
+    const [data, historyData] = await Promise.all([
+      getHomeData(Object.fromEntries(params.entries())),
+      getHistory({ page_size: '6' })
+    ])
     homeData.value = {
       stats: data?.stats || { total: 0, remote: 0, local: 0, favorite: 0 },
       hero: Array.isArray(data?.hero) ? data.hero : [],
       items: Array.isArray(data?.items) ? data.items : []
     }
+    continueHistory.value = Array.isArray(historyData?.list) ? historyData.list : []
   } catch (error) {
     loadError.value = error instanceof Error ? error.message : '首页数据加载失败'
     homeData.value = {
@@ -177,18 +167,12 @@ async function fetchHomeData() {
       hero: MOCK_DATA.hero,
       items: MOCK_DATA.items
     }
+    continueHistory.value = []
   } finally {
     loading.value = false
     await nextTick()
     scheduleScrollRestore(currentScrollKey())
   }
-}
-
-function setCategory(value) {
-  router.push({
-    name: 'Home',
-    query: value === 'all' ? {} : { category: value }
-  })
 }
 
 function goDetail(id) {
@@ -227,6 +211,10 @@ async function handleFavorite(id) {
   } catch (err) {
     loadError.value = err instanceof Error ? err.message : '收藏操作失败'
   }
+}
+
+function handleOnlineVideoAdded() {
+  fetchHomeData()
 }
 
 function normalizeHeroItem(item) {
@@ -273,6 +261,13 @@ function handleScanCompleted() {
 onActivated(async () => {
   await nextTick()
   scheduleScrollRestore(currentScrollKey())
+
+  // 如果扫描在其它页面已完成，激活时刷新数据
+  if (consumeScanCompleted()) {
+    await fetchHomeData()
+    await nextTick()
+    scheduleScrollRestore(currentScrollKey())
+  }
 })
 
 watch(currentCategory, fetchHomeData)

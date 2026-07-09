@@ -14,6 +14,11 @@ export function getMovieDetail(id) {
   return get(`/movies/${id}`)
 }
 
+// 获取相关推荐
+export function getRecommendations(id, limit = 8) {
+  return get(`/movies/${id}/recommendations`, { limit })
+}
+
 // 获取播放地址
 export function getPlayUrl(id) {
   return get(`/movies/${id}/play`)
@@ -107,4 +112,26 @@ export function playerPrevious() {
 /** 读取播放器状态（轮询） */
 export function playerGetStatus() {
   return get('/player/status')
+}
+
+// ==================== 在线视频 ====================
+
+/** 浏览视频网站，获取层级结构 */
+export function browseOnlineSite(url) {
+  return post('/online/browse', { url })
+}
+
+/** 获取视频详细信息 */
+export function getOnlineVideoDetail(url) {
+  return post('/online/detail', { url })
+}
+
+/** 添加在线视频到库 */
+export function addOnlineVideo(video) {
+  return post('/online/add', { video })
+}
+
+/** 删除在线视频 */
+export function removeOnlineVideo(videoId) {
+  return del(`/online/${videoId}`)
 }

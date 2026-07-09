@@ -1,4 +1,4 @@
-﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿/**
+﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿/**
  * 服务器管理页面
  *
  * 功能模块：
@@ -112,7 +112,7 @@ import {
 import { MOCK_DATA } from '@/api/mockData'
 
 // 全局扫描进度 Toast（模块单例，跨页面常驻）
-import { showScanToast, hideScanToast } from '@/composables/useScanToast'
+import { scanToast, showScanToast, hideScanToast } from '@/composables/useScanToast'
 
 /**
  * ==================== 常量定义 ====================
@@ -532,7 +532,7 @@ async function editSource() {
       type: apiSourceType(editForm.type)
     }
 
-    if (editForm.type === '内置OpenList' || editForm.type === '本地存储') {
+    if (editForm.type === '内置OpenList') {
       editData.driver = editForm.driver
       editData.driver_type = editForm.driver_type || editForm.driver
       editData.cookie = (editForm.cookie || '').trim()
@@ -637,6 +637,10 @@ function formatScanMessage(status) {
     return status.error || '扫描失败';
   }
 
+  if (status.stage === 'cancelled') {
+    return '扫描已取消';
+  }
+
   return '正在扫描...';
 }
 async function handleRescan(id) {
@@ -695,16 +699,37 @@ async function handleRescan(id) {
   while (scanStatus === 'scanning') {
     await new Promise(r => setTimeout(r, 1000))
     try {
+      // 用户已点击取消，停止轮询，避免后端 scanning 状态覆盖前端 cancelled 状态
+      if (scanToast.status === 'cancelled') {
+        scanStatus = 'cancelled'
+        break
+      }
+
       const status = await getScanStatus(id)
-      
+
+      if (status.stage === 'cancelled') {
+        scanStatus = 'cancelled'
+        message = formatScanMessage(status)
+        const processed = status.processed || 0
+        const total = status.total || 100
+        const progress = total > 0 ? Math.round((processed / total) * 100) : 0
+        showScanToast(id, message, 'cancelled', {
+          progress,
+          processedFiles: processed,
+          totalFiles: total,
+          currentFile: status.current || ''
+        })
+        break
+      }
+
       scanStatus = status.scanning ? 'scanning' : 'done'
       message = formatScanMessage(status)
-      
+
       // 计算进度
       const processed = status.processed || 0
       const total = status.total || 100
       const progress = total > 0 ? Math.round((processed / total) * 100) : 0
-      
+
       showScanToast(id, message, scanStatus, {
         progress,
         processedFiles: processed,
@@ -716,8 +741,10 @@ async function handleRescan(id) {
     }
   }
 
-  // 扫描完成，停留2秒后隐藏并刷新列表
-  hideScanToast()
+  // 扫描完成或取消后，停留2秒后隐藏并刷新列表
+  if (scanStatus !== 'cancelled') {
+    hideScanToast()
+  }
   await loadSources()
 }
 

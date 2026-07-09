@@ -92,7 +92,6 @@ MEDIA_CATEGORY_MAP = {
     "剧集": "电视剧",
     "tv": "电视剧",
     "电影": "电影",
-    "movie": "电影",
 }
 
 # 挂载根、分类目录和临时目录不应该被当成片名。
@@ -128,6 +127,24 @@ TITLE_ALIASES = {
     "石纪元": ["Dr. Stone", "ドクターストーン"],
     "葬送的芙莉莲": ["Frieren: Beyond Journey's End", "葬送のフリーレン"],
     "电锯人": ["Chainsaw Man", "チェンソーマン"],
+}
+
+ANIMATION_MOVIES = {
+    "玩具总动员", "Toy Story",
+    "怪兽电力公司", "Monsters, Inc.",
+    "海底总动员", "Finding Nemo",
+    "超人总动员", "The Incredibles",
+    "赛车总动员", "Cars",
+    "飞屋环游记", "Up",
+    "神偷奶爸", "Despicable Me",
+    "功夫熊猫", "Kung Fu Panda",
+    "疯狂动物城", "Zootopia",
+    "冰雪奇缘", "Frozen",
+    "寻梦环游记", "Coco",
+    "蜘蛛侠：平行宇宙", "Spider-Man: Into the Spider-Verse",
+    "蜘蛛侠：纵横宇宙", "Spider-Man: Across the Spider-Verse",
+    "蜘蛛侠：超越宇宙", "Spider-Man: Beyond the Spider-Verse",
+    "蜘蛛侠：暗影蜘蛛侠", "Spider-Man: Into the Spider-Verse",
 }
 
 # 已知压制组名称（用于清理）
@@ -338,6 +355,14 @@ def _is_explicit_version_folder(raw: str, clean: str) -> bool:
         "配音版",
         "原版",
         "新编集版",
+        "dv杜比视界版",
+        "杜比视界版",
+        "sdr标准版",
+        "sdr版",
+        "hdr版",
+        "hdr10版",
+        "杜比全景声版",
+        "全景声版",
     }
     if normalized in {item.lower() for item in exact_names}:
         return True
@@ -345,6 +370,7 @@ def _is_explicit_version_folder(raw: str, clean: str) -> bool:
         r"^(?:4k|8k|2160p|1080p|bd|blu-?ray|remux)\s*版$",
         r"^(?:director'?s\s*cut|extended\s*cut|uncut|theatrical\s*cut)$",
         r"^(?:彩色|黑白|原色|导演剪辑|导剪|加长|未删减|无删减|修复|蓝光|国语|粤语|日语|英语|中字|配音).{0,6}版$",
+        r".+版$",
     ]
     return any(re.search(pattern, normalized, re.IGNORECASE) for pattern in patterns)
 
@@ -446,6 +472,33 @@ def _title_and_version_from_path(folder_parts: list[str], episode: int | None) -
         entries = cleaned
         if not entries:
             return "", ""
+        
+        category_part = str(folder_parts[category_index] or "").strip().lower()
+        if category_part in {"电影", "movies"}:
+            if len(entries) >= 2:
+                has_version = any(_is_explicit_version_folder(entry[1], entry[2]) for entry in entries[1:])
+                
+                if len(entries) >= 3:
+                    version_entry = next(
+                        (entry for entry in entries[2:] if _is_explicit_version_folder(entry[1], entry[2])),
+                        None,
+                    )
+                    movie_title = entries[1][2]
+                    version_title = _version_display(version_entry[1], version_entry[2]) if version_entry else ""
+                    return movie_title, version_title
+                
+                if has_version:
+                    version_entry = next(
+                        (entry for entry in entries[1:] if _is_explicit_version_folder(entry[1], entry[2])),
+                        None,
+                    )
+                    movie_title = entries[0][2]
+                    version_title = _version_display(version_entry[1], version_entry[2]) if version_entry else ""
+                    return movie_title, version_title
+                
+                if len(entries) == 2:
+                    return entries[1][2], ""
+        
         version_entry = next(
             (entry for entry in entries[1:] if _is_explicit_version_folder(entry[1], entry[2])),
             None,
@@ -481,14 +534,28 @@ def _movie_version_from_filename(filename_stem: str, category: str) -> str:
 
 def _base_title_from_path(folder_parts: list[str]) -> str:
     category_index = _category_folder_index(folder_parts)
-    if category_index is None:
+    
+    if category_index is not None:
+        for part in folder_parts[category_index + 1:]:
+            if _is_ignored_title_folder(part) or _looks_like_season_folder(part):
+                continue
+            clean = _clean_text(part)
+            if clean:
+                return clean
         return ""
-    for part in folder_parts[category_index + 1:]:
-        if _is_ignored_title_folder(part) or _looks_like_season_folder(part):
+    
+    for i in range(len(folder_parts) - 1, -1, -1):
+        part = folder_parts[i]
+        if _is_ignored_title_folder(part):
+            continue
+        if _looks_like_season_folder(part):
+            continue
+        if _is_explicit_version_folder(str(part), ""):
             continue
         clean = _clean_text(part)
         if clean:
             return clean
+    
     return ""
 
 
@@ -787,14 +854,66 @@ def _extract_chapter_name(*parts: str) -> str:
 
 
 def _infer_media_category(parts: list[str], season: int | None, special_type: str) -> str:
-    """推断媒体类型"""
-    lowered = [str(part or "").lower() for part in parts]
-    for part in lowered:
-        for key, value in MEDIA_CATEGORY_MAP.items():
-            if key in part:
-                return value
-    if special_type or season is not None:
-        return "动漫" if any(token in " ".join(lowered) for token in ["动漫", "动画", "anime", "番剧"]) else "电视剧"
+    """推断媒体类型（权重分级）"""
+    text_blob = " ".join([str(part or "") for part in parts])
+    lowered_text = text_blob.lower()
+    
+    for key, value in MEDIA_CATEGORY_MAP.items():
+        if key.lower() in lowered_text:
+            return value
+    
+    if special_type:
+        if special_type in {"OVA", "OAD", "剧场版", "特别篇"}:
+            return "动漫"
+        return "电视剧" if any(token in lowered_text for token in ["电视剧", "tv", "series"]) else "动漫"
+    
+    if season is not None and season > 0:
+        has_anime_keyword = any(token in lowered_text for token in ["动漫", "动画", "anime", "番剧"])
+        if has_anime_keyword:
+            return "动漫"
+        
+        for anime_title in TITLE_ALIASES:
+            if anime_title.lower() in lowered_text:
+                return "动漫"
+        
+        return "电视剧"
+    
+    episode_patterns = [
+        re.compile(r"\bS\d{1,2}E\d{1,3}\b", re.IGNORECASE),
+        re.compile(r"\b第\s*\d+\s*[集话話]\b", re.IGNORECASE),
+    ]
+    for pattern in episode_patterns:
+        if pattern.search(text_blob):
+            has_anime_keyword = any(token in lowered_text for token in ["动漫", "动画", "anime", "番剧"])
+            if has_anime_keyword:
+                return "动漫"
+            
+            for anime_title in TITLE_ALIASES:
+                if anime_title.lower() in lowered_text:
+                    return "动漫"
+            
+            return "电视剧"
+    
+    season_keywords = ["season", "第季", "第部", "第期", "第章"]
+    if any(keyword in lowered_text for keyword in season_keywords):
+        has_anime_keyword = any(token in lowered_text for token in ["动漫", "动画", "anime", "番剧"])
+        if has_anime_keyword:
+            return "动漫"
+        
+        for anime_title in TITLE_ALIASES:
+            if anime_title.lower() in lowered_text:
+                return "动漫"
+        
+        return "电视剧"
+    
+    folder_parts = parts[:-1] if parts else []
+    clean_parts = [p for p in folder_parts if p and not _is_ignored_title_folder(p)]
+    
+    if len(clean_parts) >= 3:
+        parent_is_version = _is_explicit_version_folder(clean_parts[-1], "") if clean_parts else False
+        if parent_is_version:
+            return "电影"
+    
     return "电影"
 
 
@@ -829,6 +948,7 @@ def _pick_title_candidate(parts: list[str], filename_stem: str, season: int | No
     if cleaned_parts:
         parent = cleaned_parts[-1]
         grand_parent = cleaned_parts[-2] if len(cleaned_parts) >= 2 else ""
+        great_grand_parent = cleaned_parts[-3] if len(cleaned_parts) >= 3 else ""
         
         if _looks_like_season_folder(parent):
             if special_type:
@@ -859,6 +979,11 @@ def _pick_title_candidate(parts: list[str], filename_stem: str, season: int | No
                 else:
                     season_label = "第一季"
         
+        # 处理特殊内容目录（特别收录）
+        if special_type and grand_parent and grand_parent == "特别收录":
+            candidate = _clean_text(great_grand_parent) if great_grand_parent else _clean_text(filename_stem)
+            return candidate, season_label
+        
         # 确定主标题
         if len(cleaned_parts) >= 2 and _looks_like_season_folder(parent):
             candidate = _clean_text(grand_parent)
@@ -869,6 +994,14 @@ def _pick_title_candidate(parts: list[str], filename_stem: str, season: int | No
         
         if not candidate:
             candidate = _clean_text(filename_stem)
+        
+        # 对于电影，检查文件名是否包含系列序号（如"飞驰人生2" vs "飞驰人生"）
+        filename_clean = _clean_text(filename_stem)
+        if candidate and filename_clean and filename_clean != candidate:
+            if filename_clean.startswith(candidate) and len(filename_clean) > len(candidate):
+                suffix = filename_clean[len(candidate):].strip()
+                if suffix and suffix[0].isdigit():
+                    candidate = filename_clean
         
         return candidate, season_label
     
@@ -998,19 +1131,50 @@ def _franchise_from_parts(parts: list[str], title: str) -> str:
         text = str(part or "")
         if "合集" in text or "全集" in text:
             return _clean_text(text.replace("合集", "").replace("全集", ""))
+    
     category_index = _category_folder_index(parts)
+    
     if category_index is not None:
-        for part in parts[category_index + 1:]:
-            if _is_ignored_title_folder(part) or _looks_like_season_folder(part):
-                continue
-            clean = _clean_text(part)
-            if clean:
-                return clean
-    return title
+        category_part = str(parts[category_index] or "").strip().lower()
+        if category_part in {"电影", "movies"}:
+            for part in parts[category_index + 1:]:
+                if _is_ignored_title_folder(part) or _looks_like_season_folder(part) or _is_explicit_version_folder(str(part or ""), ""):
+                    continue
+                clean = _clean_text(part)
+                if clean and clean != title:
+                    return clean
+            return ""
+    
+    clean_parts = [
+        part for part in parts
+        if part and not _is_ignored_title_folder(part) and not _looks_like_season_folder(part) and not _is_explicit_version_folder(str(part), "")
+    ]
+    
+    if len(clean_parts) >= 2:
+        candidate = _clean_text(clean_parts[-2])
+        title_clean = _clean_text(title)
+        if candidate and candidate != title_clean:
+            return candidate
+    
+    return ""
 
 
 def _sort_bucket(category: str) -> int:
     return {"动漫": 0, "电视剧": 1, "电影": 2}.get(str(category or ""), 9)
+
+
+def _media_type_from_category_and_title(category: str, title: str) -> str:
+    if category == "动漫":
+        return "动画"
+    if category == "电视剧":
+        return "剧集"
+    
+    title_lower = str(title or "").strip().lower()
+    for anim_title in ANIMATION_MOVIES:
+        if anim_title.lower() in title_lower:
+            return "动画"
+    
+    return "电影"
 
 
 def _sort_title(name: str) -> str:
@@ -1117,13 +1281,22 @@ def parse_video_filename(file_path: str) -> dict:
             season_label = known_season_title
     hide_special_suffix = False
     if special_type and folder_parts and _detect_special_type(folder_parts[-1]):
-        special_title = _strip_special_marker(_clean_text(folder_parts[-1] if folder_parts else ""), special_type)
-        if special_title and special_title != _clean_text(main_title):
-            if base_title and special_title != _clean_text(base_title):
-                main_title = f"{base_title} {special_title}".strip()
-                hide_special_suffix = True
-            else:
-                main_title = special_title
+        has_special_collection = any(part == "特别收录" for part in folder_parts)
+        if has_special_collection:
+            for i in range(len(folder_parts) - 1, -1, -1):
+                if folder_parts[i] == "特别收录":
+                    if i > 0:
+                        main_title = _clean_text(folder_parts[i - 1])
+                    break
+            hide_special_suffix = True
+        else:
+            special_title = _strip_special_marker(_clean_text(folder_parts[-1] if folder_parts else ""), special_type)
+            if special_title and special_title != _clean_text(main_title):
+                if base_title and special_title != _clean_text(base_title):
+                    main_title = f"{base_title} {special_title}".strip()
+                    hide_special_suffix = True
+                else:
+                    main_title = special_title
     
     # 如果没有检测到季数但有季标签，尝试从季标签提取季数
     if season is None and season_label:
@@ -1168,7 +1341,7 @@ def parse_video_filename(file_path: str) -> dict:
         "category": category,
         "aliases": _title_aliases(main_title, category),
         "origin_countries": _origin_countries(category),
-        "media_type": "动画" if category == "动漫" else ("剧集" if category == "电视剧" else "电影"),
+        "media_type": _media_type_from_category_and_title(category, main_title or filename_stem),
         "year_hint": year,
         "resolution": _extract_resolution(text_blob),
         "video_codec": _extract_codec(text_blob),

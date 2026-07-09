@@ -1,5 +1,5 @@
 <template>
-  <section class="episode-section">
+  <section v-if="shouldShowSection" class="episode-section">
     <div class="episode-header">
       <h2 class="section-title">
         <n-icon><TvOutline /></n-icon>
@@ -131,6 +131,16 @@ const visibleChapters = computed(() => {
     .filter(({ item }) => seasonMovieIds.includes(item.movieId || item.id))
 })
 
+const totalEpisodes = computed(() => {
+  return props.versions.reduce((sum, v) => sum + (v.episodes?.length || 0), 0)
+})
+
+const shouldShowSection = computed(() => {
+  if (props.mediaVersions.length > 1) return true
+  if (visibleChapters.value.length > 1) return true
+  return totalEpisodes.value > 1
+})
+
 const sectionTitle = computed(() => {
   if (props.mediaVersions.length > 1 || visibleChapters.value.length > 1) {
     return '剧集'
@@ -145,20 +155,15 @@ function selectVersion(index) {
 function isMediaVersionActive(version) {
   const current = props.versions[currentVersion.value]
   if (!current) return false
-  const seasonMovieIds = Array.isArray(version.seasons)
-    ? version.seasons.map(item => item.movieId || item.id).filter(Boolean)
-    : []
-  if (seasonMovieIds.length) {
-    return seasonMovieIds.includes(current.movieId || current.id)
-  }
-  return (current.versionTitle || '原版') === (version.versionTitle || version.name)
+  const versionName = version.name || version.versionTitle || ''
+  return (current.versionTitle || current.name || '') === versionName
 }
 
 function selectMediaVersion(version) {
-  const seasonMovieIds = Array.isArray(version.seasons)
-    ? version.seasons.map(item => item.movieId || item.id).filter(Boolean)
-    : []
-  const index = props.versions.findIndex(item => seasonMovieIds.includes(item.movieId || item.id))
+  const versionName = version.name || version.versionTitle || ''
+  const index = props.versions.findIndex(item => 
+    (item.versionTitle || item.name || '') === versionName
+  )
   if (index >= 0) {
     currentVersion.value = index
   }
