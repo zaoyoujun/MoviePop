@@ -89,10 +89,11 @@
             <img :src="activeHero.poster" :alt="activeHero.title" />
           </div>
           <DetailEpisodes
-            v-if="detail.versions?.length > 0"
+            v-if="detail.versions?.length > 0 || detail.seasons?.length > 0"
             v-model="currentVersion"
             :versions="detail.versions"
             :media-versions="detail.mediaVersions"
+            :seasons="detail.seasons"
             :fallback-image="activeHero.backdrop || activeHero.poster || heroImage"
             @play="handleVersionPlay"
           />
@@ -637,7 +638,7 @@ const activeHero = computed(() => {
     rating: chapter.score || detail.value.rating,
     tags: chapter.tags?.length ? chapter.tags : detail.value.tags,
     description: chapter.description || detail.value.description,
-    backdrop: chapter.backdropUrl || detail.value.backdrop,
+    backdrop: chapter.backdropUrl || chapter.coverUrl || detail.value.backdrop,
     poster: chapter.coverUrl || detail.value.poster
   }
 })

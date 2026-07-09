@@ -8,6 +8,19 @@
       <span>{{ currentEpisodes.length }} 集</span>
     </div>
 
+    <div v-if="seasons.length > 1" class="season-selector">
+      <button
+        v-for="season in seasons"
+        :key="season.seasonNumber"
+        class="season-btn"
+        :class="{ active: currentSeasonNumber === season.seasonNumber }"
+        type="button"
+        @click="selectSeason(season.seasonNumber)"
+      >
+        {{ season.name }}
+      </button>
+    </div>
+
     <div v-if="mediaVersions.length > 1" class="version-block">
       <span class="switch-label">版本</span>
       <div class="season-selector compact">
@@ -15,7 +28,7 @@
           v-for="version in mediaVersions"
           :key="version.name"
           class="season-btn"
-          :class="{ active: isMediaVersionActive(version) }"
+          :class="{ active: currentVersionName === version.name }"
           type="button"
           @click="selectMediaVersion(version)"
         >
@@ -45,9 +58,9 @@
       <div ref="railRef" class="episode-rail">
         <article
           v-for="episode in currentEpisodes"
-          :key="episode.num"
+          :key="episode.id"
           class="episode-card"
-          :class="{ watched: episode.watched, playing: isPlaying }"
+          :class="{ watched: episode.progress >= 90, playing: isPlaying }"
           :title="`双击播放：${episode.title}`"
           @dblclick="handleDoubleClick(episode)"
         >
@@ -56,7 +69,7 @@
             <div v-if="episode.progress > 0 && episode.progress < 90" class="episode-progress">
               <div class="progress-fill" :style="{ width: `${episode.progress}%` }"></div>
             </div>
-            <div v-if="episode.watched" class="watched-badge">
+            <div v-if="episode.progress >= 90" class="watched-badge">
               <n-icon><CheckmarkOutline /></n-icon>
             </div>
           </div>
@@ -86,6 +99,10 @@ const props = defineProps({
     type: Array,
     default: () => []
   },
+  seasons: {
+    type: Array,
+    default: () => []
+  },
   modelValue: {
     type: Number,
     default: 0
@@ -101,19 +118,35 @@ const emit = defineEmits(['update:modelValue', 'play'])
 const railRef = ref(null)
 const isPlaying = ref(false)
 const showHint = ref(false)
+const currentSeasonNumber = ref(props.seasons[0]?.seasonNumber || 1)
 
 const currentVersion = computed({
   get: () => props.modelValue,
   set: (val) => emit('update:modelValue', val)
 })
 
+const currentVersionName = computed(() => {
+  const current = props.versions[currentVersion.value]
+  return current?.versionTitle || current?.name || ''
+})
+
+const currentSeason = computed(() => {
+  return props.seasons.find(s => s.seasonNumber === currentSeasonNumber.value) || props.seasons[0] || null
+})
+
 const currentEpisodes = computed(() => {
-  return props.versions[currentVersion.value]?.episodes || []
+  if (props.versions[currentVersion.value]) {
+    return props.versions[currentVersion.value].episodes || []
+  }
+  if (currentSeason.value) {
+    return currentSeason.value.episodes || []
+  }
+  return []
 })
 
 const activeMediaVersion = computed(() => {
   if (!props.mediaVersions.length) return null
-  return props.mediaVersions.find(version => isMediaVersionActive(version)) || props.mediaVersions[0]
+  return props.mediaVersions.find(v => v.name === currentVersionName.value) || props.mediaVersions[0]
 })
 
 const visibleChapters = computed(() => {
@@ -136,27 +169,29 @@ const totalEpisodes = computed(() => {
 })
 
 const shouldShowSection = computed(() => {
+  if (props.seasons.length > 1) return true
   if (props.mediaVersions.length > 1) return true
   if (visibleChapters.value.length > 1) return true
   return totalEpisodes.value > 1
 })
 
 const sectionTitle = computed(() => {
-  if (props.mediaVersions.length > 1 || visibleChapters.value.length > 1) {
+  if (props.seasons.length > 1 || props.mediaVersions.length > 1 || visibleChapters.value.length > 1) {
     return '剧集'
   }
   return '选集'
 })
 
-function selectVersion(index) {
-  currentVersion.value = index
+function selectSeason(seasonNumber) {
+  currentSeasonNumber.value = seasonNumber
+  const index = props.seasons.findIndex(s => s.seasonNumber === seasonNumber)
+  if (index >= 0) {
+    currentVersion.value = index
+  }
 }
 
-function isMediaVersionActive(version) {
-  const current = props.versions[currentVersion.value]
-  if (!current) return false
-  const versionName = version.name || version.versionTitle || ''
-  return (current.versionTitle || current.name || '') === versionName
+function selectVersion(index) {
+  currentVersion.value = index
 }
 
 function selectMediaVersion(version) {
@@ -170,7 +205,7 @@ function selectMediaVersion(version) {
 }
 
 function thumbnailFor(episode) {
-  const current = props.versions[currentVersion.value] || {}
+  const current = props.versions[currentVersion.value] || currentSeason.value || {}
   return episode.thumbnailUrl ||
     episode.stillUrl ||
     episode.imageUrl ||
@@ -196,7 +231,7 @@ function handleDoubleClick(episode) {
   isPlaying.value = true
   emit('play', {
     version: currentVersion.value,
-    episode: episode.num,
+    episode: episode.episodeNumber,
     title: episode.title,
     versionName: props.versions[currentVersion.value]?.name
   })

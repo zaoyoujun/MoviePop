@@ -1101,7 +1101,7 @@ class CoverScraper:
             found_title = best.get("title") or best.get("name") or title
             result["title"] = found_title
             result["original_title"] = best.get("original_title") or best.get("original_name") or ""
-            result["description"] = translate_to_chinese(((details.get("overview") or best.get("overview") or "")[:500]))
+            result["description"] = translate_to_chinese(((season_details.get("overview") or details.get("overview") or best.get("overview") or "")[:500]))
             result["score"] = round(float(details.get("vote_average") or best.get("vote_average") or 0), 1)
             result["vote_count"] = int(details.get("vote_count") or best.get("vote_count") or 0)
             found_year = self._extract_year(
@@ -1116,7 +1116,7 @@ class CoverScraper:
                 if local_cover:
                     result["cover_url"] = local_cover
 
-            backdrop = details.get("backdrop_path") or best.get("backdrop_path") or self._tmdb_season_backdrop(season_details)
+            backdrop = season_details.get("backdrop_path") or details.get("backdrop_path") or best.get("backdrop_path") or self._tmdb_season_backdrop(season_details)
             if backdrop:
                 local_backdrop = self._download_cover(self._tmdb_image_url(backdrop, "backdrop"), title, season, chapter_name, part, "backdrop")
                 if local_backdrop:

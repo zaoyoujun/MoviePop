@@ -217,12 +217,21 @@ function handleOnlineVideoAdded() {
   fetchHomeData()
 }
 
+function stripSeasonSuffix(title) {
+  if (!title) return title
+  return title
+    .replace(/\s*第[一二三四五六七八九十\d]+季\s*$/, '')
+    .replace(/\s*Season\s*\d+\s*$/i, '')
+    .replace(/\s*S\d+\s*$/i, '')
+    .trim()
+}
+
 function normalizeHeroItem(item) {
   const categoryLabel = categoryLabels[item.category] || item.category || '影视'
   const sourceName = item.sourceName || sourceTypeLabels[item.sourceType] || item.sourceType || '未知来源'
   return {
     id: item.id,
-    title: item.title || '未命名影视',
+    title: stripSeasonSuffix(item.title) || '未命名影视',
     year: item.year || '',
     rating: item.rating || item.score || '9.2',
     description: item.description || item.overview || '',
@@ -237,7 +246,7 @@ function normalizeMovieCard(item, index = 0) {
   return {
     id: item.id,
     category: item.category,
-    title: item.title || '未命名影视',
+    title: stripSeasonSuffix(item.title) || '未命名影视',
     type: categoryLabels[item.category] || item.category || '影视',
     year: item.year || '',
     source: item.sourceName || sourceTypeLabels[item.sourceType] || item.sourceType || '未知',

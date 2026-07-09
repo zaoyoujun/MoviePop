@@ -148,8 +148,7 @@ def _resource_group_key(movie: dict) -> str:
         title = _identity_text(movie.get("display_title") or movie.get("title") or movie.get("season_title"))
         return f"{base}::special::{special_type}::{title}"
 
-    season = int(movie.get("season") or 1)
-    return f"{base}::season::{season}"
+    return base
 
 
 def _has_display_suffix(movie: dict) -> bool:
@@ -699,25 +698,19 @@ def movie_to_detail(movie: dict) -> dict:
     detail["lastPlayTime"] = detail["playback"]["lastPlayTime"]
 
     related_movies = _related_movies_for_detail(movie)
-    version_names = {
-        str(item.get("version_title") or "").strip()
-        for item in related_movies
-        if str(item.get("version_title") or "").strip()
-    }
-    has_explicit_versions = bool(version_names)
-    seasons = []
+    
+    season_map: dict[int, dict[str, Any]] = {}
     version_map: dict[str, dict[str, Any]] = {}
+    all_seasons = []
+    
     for related in related_movies:
         season_number = int(related.get("season") or 1)
         season_title = str(related.get("season_title") or "").strip()
         explicit_version_title = str(related.get("version_title") or "").strip()
         part = int(related.get("part") or 0)
-        version_title = season_title or f"第{season_number}季"
-        if part and str(part) not in version_title:
-            version_title = f"{version_title} Part {part}"
-        if related.get("special_type"):
-            version_title = f"{related.get('special_type')} {version_title}".strip()
-
+        
+        season_name = season_title or f"第{season_number}季"
+        
         raw_episodes = related.get("episodes", [])
         episode_files = related.get("files", related.get("episode_files", []))
         related_playback = related.get("playback") if isinstance(related.get("playback"), dict) else {}
@@ -747,54 +740,79 @@ def movie_to_detail(movie: dict) -> dict:
                     "progress": ep_progress,
                 })
 
+        if season_number not in season_map:
+            season_map[season_number] = {
+                "id": f"season:{season_number}",
+                "name": season_name,
+                "title": season_name,
+                "seasonNumber": season_number,
+                "seasonTitle": season_title,
+                "displayTitle": _movie_display_title(related),
+                "description": related.get("intro", ""),
+                "score": related.get("rating", 0) or 0,
+                "year": related.get("year", related.get("year_hint", 0)),
+                "tags": _merge_unique_labels(related.get("tags"), related.get("genres"), related.get("countries")),
+                "coverUrl": related.get("cover_url") or "",
+                "backdropUrl": related.get("backdrop_url") or related.get("cover_url") or "",
+                "episodes": [],
+                "versions": [],
+            }
+        
+        version_name = explicit_version_title or "原版"
+        if version_name not in version_map:
+            version_map[version_name] = {
+                "id": f"version:{version_name}",
+                "name": version_name,
+                "title": version_name,
+                "versionTitle": explicit_version_title,
+                "episodes": [],
+                "seasons": [],
+            }
+        
+        chapter_name = f"Part {part}" if part else ""
+        
         season_entry = {
             "id": related.get("id", detail["id"]),
-            "name": version_title,
-            "title": version_title,
+            "name": season_name,
+            "title": season_name,
             "displayTitle": _movie_display_title(related),
             "description": related.get("intro", ""),
             "score": related.get("rating", 0) or 0,
             "year": related.get("year", related.get("year_hint", 0)),
             "tags": _merge_unique_labels(related.get("tags"), related.get("genres"), related.get("countries")),
-            "versionName": version_title,
-            "label": version_title,
+            "versionName": version_name,
+            "label": season_name,
             "seasonNumber": season_number,
-            "seasonTitle": version_title,
+            "seasonTitle": season_title,
             "versionTitle": explicit_version_title,
             "part": part,
+            "chapterName": chapter_name,
             "movieId": related.get("id", detail["id"]),
             "coverUrl": related.get("cover_url") or "",
             "backdropUrl": related.get("backdrop_url") or related.get("cover_url") or "",
             "episodes": episode_list,
         }
-        seasons.append(season_entry)
-        if has_explicit_versions:
-            version_name = explicit_version_title or "原版"
-            version_entry = version_map.setdefault(version_name, {
-                "id": f"version:{version_name}",
-                "name": version_name,
-                "title": version_name,
-                "versionName": version_name,
-                "label": version_name,
-                "versionTitle": explicit_version_title,
-                "seasons": [],
-                "episodes": [],
-            })
-            version_entry["seasons"].append(season_entry)
-            if not version_entry["episodes"]:
-                version_entry["episodes"] = episode_list
+        
+        season_map[season_number]["episodes"].extend(episode_list)
+        season_map[season_number]["versions"].append(version_name)
+        
+        version_map[version_name]["episodes"].extend(episode_list)
+        version_map[version_name]["seasons"].append(season_entry)
+        
+        all_seasons.append(season_entry)
 
+    detail["seasons"] = sorted(season_map.values(), key=lambda x: x["seasonNumber"])
+    detail["versions"] = list(version_map.values())
+    detail["hasVersions"] = len(detail["versions"]) > 1
+    detail["hasMultipleSeasons"] = len(detail["seasons"]) > 1
+    
     season_number = int(movie.get("season") or 1)
     season_title = str(movie.get("season_title") or "").strip()
     detail["currentSeasonNumber"] = season_number
     detail["seasonTitle"] = season_title or f"第{season_number}季"
-    detail["seasons"] = seasons
 
-    current_season = next((item for item in seasons if item.get("movieId") == movie.get("id")), seasons[0] if seasons else None)
+    current_season = next((item for item in all_seasons if item.get("movieId") == movie.get("id")), all_seasons[0] if all_seasons else None)
     detail["episodes"] = current_season["episodes"] if current_season else []
-    detail["versions"] = list(version_map.values()) if has_explicit_versions else []
-    detail["hasVersions"] = len(detail["versions"]) > 1
-    detail["hasMultipleSeasons"] = len(seasons) > 1
 
     return detail
 
