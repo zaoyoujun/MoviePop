@@ -53,6 +53,76 @@ COUNTRY_NAME_MAP = {
 COVERS_DIR = AppConfig().COVERS_DIR
 COVERS_DIR.mkdir(parents=True, exist_ok=True)
 
+_COVER_CACHE = {}
+_COVER_CACHE_LOADED = False
+
+
+def _load_cover_cache():
+    global _COVER_CACHE, _COVER_CACHE_LOADED
+    if _COVER_CACHE_LOADED:
+        return
+    _COVER_CACHE = {}
+    try:
+        for filepath in COVERS_DIR.iterdir():
+            if filepath.is_file() and filepath.suffix.lower() in ('.webp', '.jpg', '.jpeg', '.png'):
+                filename = filepath.name
+                name_part = filename.split('_')[0]
+                if not name_part:
+                    continue
+                clean_name = re.sub(r"[^\w\u4e00-\u9fff]", "_", name_part)[:30]
+                image_type = 'poster'
+                if '_backdrop' in filename:
+                    image_type = 'backdrop'
+                key = f"{clean_name}_{image_type}"
+                if key not in _COVER_CACHE:
+                    _COVER_CACHE[key] = []
+                _COVER_CACHE[key].append(filename)
+    except Exception as e:
+        logger.warning("加载封面缓存失败: %s", e)
+    _COVER_CACHE_LOADED = True
+
+
+def _find_local_cover(title: str, season: int = 1, chapter_name: str = "", part: int | None = None, image_type: str = "poster") -> str:
+    _load_cover_cache()
+    safe_title = re.sub(r"[^\w\u4e00-\u9fff]", "_", title)[:30]
+    cache_key = f"{safe_title}_{image_type}"
+    
+    if cache_key not in _COVER_CACHE:
+        return ""
+    
+    filenames = _COVER_CACHE[cache_key]
+    if len(filenames) == 1:
+        return f"/covers/{quote(filenames[0])}"
+    
+    exact_candidates = []
+    loose_candidates = []
+    
+    for filename in filenames:
+        season_match = True
+        if season > 1 and f"_S{season}" not in filename:
+            season_match = False
+        
+        chapter_match = True
+        if chapter_name:
+            safe_chapter = re.sub(r"[^\w\u4e00-\u9fff]", "_", chapter_name)[:10]
+            if safe_chapter and f"_{safe_chapter}" not in filename:
+                chapter_match = False
+        
+        part_match = True
+        if part and part > 0 and f"_P{part}" not in filename:
+            part_match = False
+        
+        if season_match and chapter_match and part_match:
+            exact_candidates.append(filename)
+        else:
+            loose_candidates.append(filename)
+    
+    if exact_candidates:
+        return f"/covers/{quote(exact_candidates[0])}"
+    if loose_candidates:
+        return f"/covers/{quote(loose_candidates[0])}"
+    return ""
+
 
 # ==================== 杈呭姪鍑芥暟 ====================
 def normalize_chinese_punctuation(text):
@@ -956,7 +1026,7 @@ class CoverScraper:
             image_el = soup.find("meta", property="og:image") or soup.find("img", rel="v:image")
             image_url = image_el.get("content") if image_el and image_el.name == "meta" else (image_el.get("src") if image_el else "")
             if image_url:
-                local_cover = self._download_cover(image_url, title, season, chapter_name, part)
+                local_cover = self._download_cover(image_url, title, season, chapter_name, part, "poster")
                 result["cover_url"] = local_cover or image_url
                 result["backdrop_url"] = result["cover_url"]
 
@@ -1042,13 +1112,13 @@ class CoverScraper:
 
             poster = season_details.get("poster_path") or details.get("poster_path") or best.get("poster_path")
             if poster:
-                local_cover = self._download_cover(self._tmdb_image_url(poster, "poster"), title, season, chapter_name, part)
+                local_cover = self._download_cover(self._tmdb_image_url(poster, "poster"), title, season, chapter_name, part, "poster")
                 if local_cover:
                     result["cover_url"] = local_cover
 
             backdrop = self._tmdb_season_backdrop(season_details) or details.get("backdrop_path") or best.get("backdrop_path")
             if backdrop:
-                local_backdrop = self._download_cover(self._tmdb_image_url(backdrop, "backdrop"), title, season, chapter_name, part)
+                local_backdrop = self._download_cover(self._tmdb_image_url(backdrop, "backdrop"), title, season, chapter_name, part, "backdrop")
                 if local_backdrop:
                     result["backdrop_url"] = local_backdrop
             elif result.get("cover_url"):
@@ -1280,7 +1350,7 @@ class CoverScraper:
 
             image_url = self._extract_tmdb_card_image(card)
             if image_url:
-                local_cover = self._download_cover(image_url, title, 1, chapter_name, part)
+                local_cover = self._download_cover(image_url, title, 1, chapter_name, part, "poster")
                 if local_cover:
                     result["cover_url"] = local_cover
                     result["backdrop_url"] = local_cover
@@ -1428,11 +1498,17 @@ class CoverScraper:
             logger.warning("提取年份失败: %s", e)
             return 0
 
-    def _download_cover(self, image_url: str, title: str, season: int = 1, chapter_name: str = "", part: int | None = None) -> str:
+    def _download_cover(self, image_url: str, title: str, season: int = 1, chapter_name: str = "", part: int | None = None, image_type: str = "poster") -> str:
         # Download a cover image to covers/ and return the local URL.
+        # image_type: "poster" for vertical cover (首页卡片), "backdrop" for horizontal cover (详情页背景)
         try:
             if not image_url:
                 return ""
+
+            local_cover = _find_local_cover(title, season, chapter_name, part, image_type)
+            if local_cover:
+                logger.debug("使用本地缓存封面(%s): %s", image_type, local_cover)
+                return local_cover
 
             safe_title = re.sub(r"[^\w\u4e00-\u9fff]", "_", title)[:30]
             file_hash = hashlib.md5(image_url.encode()).hexdigest()[:8]
@@ -1444,7 +1520,9 @@ class CoverScraper:
             
             part_suffix = f"_P{part}" if part and part > 0 else ""
             
-            filename = f"{safe_title}{season_suffix}{chapter_suffix}{part_suffix}_{file_hash}.webp"
+            type_suffix = "_backdrop" if image_type == "backdrop" else ""
+            
+            filename = f"{safe_title}{season_suffix}{chapter_suffix}{part_suffix}{type_suffix}_{file_hash}.webp"
             filepath = COVERS_DIR / filename
             if filepath.exists():
                 return f"/covers/{quote(filename)}"
@@ -1470,7 +1548,7 @@ class CoverScraper:
             elif "image/png" in content_type or ".png" in image_url.lower():
                 img_suffix = "png"
 
-            filename = f"{safe_title}{season_suffix}{chapter_suffix}{part_suffix}_{file_hash}.{img_suffix}"
+            filename = f"{safe_title}{season_suffix}{chapter_suffix}{part_suffix}{type_suffix}_{file_hash}.{img_suffix}"
             filepath = COVERS_DIR / filename
             with open(filepath, "wb") as f:
                 for chunk in resp.iter_content(chunk_size=1024 * 8):

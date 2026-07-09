@@ -582,6 +582,7 @@ def _scrape_metadata(source_id: str, movies: list[dict[str, Any]], scraper: Any 
                 or _clean_log_title(movie)
                 or str(movie.get("search_title") or "").strip()
             )
+            
             query_names = _scrape_query_names(movie)
             preferred_source = _preferred_scrape_source(scraper, movie)
             logger.info("开始刮削：选择%s源 搜索名：%s", preferred_source, " ，".join(query_names))

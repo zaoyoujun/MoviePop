@@ -1779,11 +1779,11 @@ def _apply_manual_scrape_metadata(
     backdrop_url = str(metadata.get("backdropUrl") or metadata.get("backdrop") or "").strip()
     season = int(movie.get("season") or 1)
     if apply_poster and cover_url:
-        movie["cover_url"] = _download_manual_image(scraper, cover_url, movie.get("title") or title, season) or cover_url
+        movie["cover_url"] = _download_manual_image(scraper, cover_url, movie.get("title") or title, season, "poster") or cover_url
     elif apply_poster and clear_empty and any(key in metadata for key in ("coverUrl", "posterUrl", "poster")):
         movie["cover_url"] = ""
     if apply_backdrop and backdrop_url:
-        movie["backdrop_url"] = _download_manual_image(scraper, backdrop_url, movie.get("title") or title, season) or backdrop_url
+        movie["backdrop_url"] = _download_manual_image(scraper, backdrop_url, movie.get("title") or title, season, "backdrop") or backdrop_url
     elif apply_backdrop and clear_empty and any(key in metadata for key in ("backdropUrl", "backdrop")):
         movie["backdrop_url"] = ""
     elif mode == "all" and movie.get("cover_url") and not movie.get("backdrop_url"):
@@ -1828,11 +1828,11 @@ def _apply_manual_scrape_metadata(
     movie["updated_at"] = _now_iso()
 
 
-def _download_manual_image(scraper, image_url: str, title: str, season: int) -> str:
+def _download_manual_image(scraper, image_url: str, title: str, season: int, image_type: str = "poster") -> str:
     if not image_url.startswith(("http://", "https://")):
         return image_url
     try:
-        return scraper._download_cover(image_url, title, season)
+        return scraper._download_cover(image_url, title, season, image_type=image_type)
     except Exception as exc:
         logger.debug("Manual image download failed: %s", exc)
         return ""
