@@ -758,18 +758,24 @@ def movie_to_detail(movie: dict) -> dict:
                 "versions": [],
             }
         
-        version_name = explicit_version_title or "原版"
+        chapter_name = f"Part {part}" if part else ""
+        
+        if chapter_name:
+            version_name = f"{season_name} {chapter_name}"
+        elif explicit_version_title:
+            version_name = explicit_version_title
+        else:
+            version_name = season_name
+        
         if version_name not in version_map:
             version_map[version_name] = {
                 "id": f"version:{version_name}",
                 "name": version_name,
                 "title": version_name,
-                "versionTitle": explicit_version_title,
+                "versionTitle": explicit_version_title or chapter_name,
                 "episodes": [],
                 "seasons": [],
             }
-        
-        chapter_name = f"Part {part}" if part else ""
         
         season_entry = {
             "id": related.get("id", detail["id"]),
@@ -781,10 +787,10 @@ def movie_to_detail(movie: dict) -> dict:
             "year": related.get("year", related.get("year_hint", 0)),
             "tags": _merge_unique_labels(related.get("tags"), related.get("genres"), related.get("countries")),
             "versionName": version_name,
-            "label": season_name,
+            "label": chapter_name if chapter_name else season_name,
             "seasonNumber": season_number,
             "seasonTitle": season_title,
-            "versionTitle": explicit_version_title,
+            "versionTitle": explicit_version_title or chapter_name,
             "part": part,
             "chapterName": chapter_name,
             "movieId": related.get("id", detail["id"]),

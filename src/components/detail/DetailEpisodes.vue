@@ -8,6 +8,7 @@
       <span>{{ currentEpisodes.length }} 集</span>
     </div>
 
+    <!-- 1. 选择第几季 -->
     <div v-if="seasons.length > 1" class="season-selector">
       <button
         v-for="season in seasons"
@@ -21,22 +22,7 @@
       </button>
     </div>
 
-    <div v-if="mediaVersions.length > 1" class="version-block">
-      <span class="switch-label">版本</span>
-      <div class="season-selector compact">
-        <button
-          v-for="version in mediaVersions"
-          :key="version.name"
-          class="season-btn"
-          :class="{ active: currentVersionName === version.name }"
-          type="button"
-          @click="selectMediaVersion(version)"
-        >
-          {{ version.name }}
-        </button>
-      </div>
-    </div>
-
+    <!-- 2. 选择章节（Part） -->
     <div v-if="visibleChapters.length > 1" class="season-selector">
       <button
         v-for="chapter in visibleChapters"
@@ -125,11 +111,6 @@ const currentVersion = computed({
   set: (val) => emit('update:modelValue', val)
 })
 
-const currentVersionName = computed(() => {
-  const current = props.versions[currentVersion.value]
-  return current?.versionTitle || current?.name || ''
-})
-
 const currentSeason = computed(() => {
   return props.seasons.find(s => s.seasonNumber === currentSeasonNumber.value) || props.seasons[0] || null
 })
@@ -144,24 +125,21 @@ const currentEpisodes = computed(() => {
   return []
 })
 
-const activeMediaVersion = computed(() => {
-  if (!props.mediaVersions.length) return null
-  return props.mediaVersions.find(v => v.name === currentVersionName.value) || props.mediaVersions[0]
-})
-
 const visibleChapters = computed(() => {
-  if (!activeMediaVersion.value) {
-    return props.versions.map((item, index) => ({ item, index }))
+  let filtered = props.versions
+
+  // 按当前季过滤出该季下的所有 Part
+  if (props.seasons.length > 1) {
+    const season = props.seasons.find(s => s.seasonNumber === currentSeasonNumber.value)
+    if (season) {
+      filtered = filtered.filter(v => v.movieId === season.id || v.id === season.id)
+    }
   }
-  const seasonMovieIds = Array.isArray(activeMediaVersion.value.seasons)
-    ? activeMediaVersion.value.seasons.map(item => item.movieId || item.id).filter(Boolean)
-    : []
-  if (!seasonMovieIds.length) {
-    return props.versions.map((item, index) => ({ item, index }))
-  }
-  return props.versions
-    .map((item, index) => ({ item, index }))
-    .filter(({ item }) => seasonMovieIds.includes(item.movieId || item.id))
+
+  return filtered.map((item) => ({
+    item,
+    index: props.versions.indexOf(item)
+  }))
 })
 
 const totalEpisodes = computed(() => {
@@ -184,7 +162,14 @@ const sectionTitle = computed(() => {
 
 function selectSeason(seasonNumber) {
   currentSeasonNumber.value = seasonNumber
-  const index = props.seasons.findIndex(s => s.seasonNumber === seasonNumber)
+  const season = props.seasons.find(s => s.seasonNumber === seasonNumber)
+  if (!season) return
+  // 优先通过 season id 匹配对应版本（支持同一季拆分为多个 Part）
+  let index = props.versions.findIndex(v => v.movieId === season.id || v.id === season.id)
+  // 兜底：按 seasons 原顺序匹配
+  if (index < 0) {
+    index = props.seasons.findIndex(s => s.seasonNumber === seasonNumber)
+  }
   if (index >= 0) {
     currentVersion.value = index
   }
@@ -192,16 +177,6 @@ function selectSeason(seasonNumber) {
 
 function selectVersion(index) {
   currentVersion.value = index
-}
-
-function selectMediaVersion(version) {
-  const versionName = version.name || version.versionTitle || ''
-  const index = props.versions.findIndex(item => 
-    (item.versionTitle || item.name || '') === versionName
-  )
-  if (index >= 0) {
-    currentVersion.value = index
-  }
 }
 
 function thumbnailFor(episode) {
