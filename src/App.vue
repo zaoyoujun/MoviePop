@@ -48,13 +48,16 @@ const themeOverrides = {
 
 .app-frame--desktop {
   display: grid;
-  grid-template-rows: 34px minmax(0, 1fr);
+  grid-template-rows: 40px minmax(0, 1fr);
 }
 
 .app-titlebar {
   width: 100%;
-  background: rgba(23, 23, 24, 0.98);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  background:
+    radial-gradient(circle at 16% -80%, rgba(116, 75, 162, 0.33), transparent 42%),
+    linear-gradient(90deg, rgba(17, 20, 28, 0.99), rgba(10, 13, 18, 0.98));
+  border-bottom: 1px solid rgba(161, 146, 255, 0.2);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.26);
   -webkit-app-region: drag;
 }
 
