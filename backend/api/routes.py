@@ -228,6 +228,13 @@ async def list_sources():
 @router.post("/api/sources/verify")
 async def verify_source(request: Request):
     body = await _parse_request_body(request)
+    source_id = str(body.get("source_id") or body.get("sourceId") or "").strip()
+    if source_id and not str(body.get("password") or ""):
+        # 公开的源列表不返回密码。编辑已有 WebDAV 源时，允许验证接口
+        # 在请求未提供新密码的情况下复用其本地保存的密码。
+        saved_source = _find_source(source_id)
+        if saved_source and source_service.normalize_type(saved_source.get("type") or "") == "webdav":
+            body["password"] = saved_source.get("password") or ""
     source_type = source_service.normalize_type(body.get("type") or body.get("provider") or "")
     if source_type in {"web", "remote"}:
         source_type = "webdav"
@@ -260,7 +267,16 @@ async def browse_source_directory(request: Request):
     source_id = str(body.get("source_id") or body.get("sourceId") or "").strip()
     path = str(body.get("path") or "/").strip() or "/"
     if source_id:
-        return await browse_source_by_id(source_id, path)
+        saved_source = _find_source(source_id)
+        if not saved_source:
+            return api_response(code=404, message="Data source not found", data={"items": []})
+        # 保留编辑表单中的主机、端口等改动，但在密码字段为空时复用保存的密码。
+        # 这样添加目录不需要再次输入密码，也不会把密码暴露给渲染进程。
+        if source_service.normalize_type(body.get("type") or "") == "webdav":
+            if not str(body.get("password") or ""):
+                body["password"] = saved_source.get("password") or ""
+        else:
+            return await browse_source_by_id(source_id, path)
 
     source_type = source_service.normalize_type(body.get("type") or "")
     if source_type == "local":

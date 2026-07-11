@@ -189,6 +189,11 @@ async function verifySource() {
       driver_type: form.driver_type || form.driver || '',
       cookie: (form.cookie || '').trim()
     }
+    // 密码不会通过列表接口返回。编辑已保存的 WebDAV 时让后端按 ID
+    // 复用保存的密码，避免仅调整目录就变成匿名连接。
+    if (showEditModal.value && form.type === 'WebDAV' && editingSourceId.value) {
+      verifyData.source_id = editingSourceId.value
+    }
     Object.assign(verifyData, collectOpenListFields(form))
 
     const data = await apiVerifySource(verifyData)
@@ -553,7 +558,10 @@ async function editSource() {
       editData.port = editForm.port || ''
       editData.protocol = editForm.protocol
       editData.username = editForm.username || ''
-      editData.password = editForm.password || ''
+      // 空密码表示“保持原密码”，不能覆盖掉后端已保存的凭据。
+      if (editForm.password) {
+        editData.password = editForm.password
+      }
       editData.path = `${editForm.protocol}://${editForm.host}${port}${mainPath}`
       editData.selected_paths = selectedPaths.value
     } else {
@@ -788,6 +796,9 @@ async function browseDirectory(path = '/') {
       driver: form.driver || '',
       driver_type: form.driver_type || form.driver || '',
       cookie: (form.cookie || '').trim()
+    }
+    if (showEditModal.value && form.type === 'WebDAV' && editingSourceId.value) {
+      browseData.source_id = editingSourceId.value
     }
     Object.assign(browseData, collectOpenListFields(form))
     const result = await apiBrowseDirectory(browseData)

@@ -45,13 +45,8 @@ const getBackendLaunch = () => {
     }
   }
 
-  const packagedBackend = join(APP_ROOT, 'backend-dist', 'MoviePopBackend.exe')
-  if (existsSync(packagedBackend)) {
-    return { command: packagedBackend, args: [], cwd: dirname(packagedBackend) }
-  }
-
-  // Development checkouts normally do not contain backend-dist. Run the source
-  // backend so `npm run electron:dev` works without a separate server command.
+  // 开发模式始终运行源码后端。即使工作区已有构建产物，也不能启动旧的
+  // backend-dist/MoviePopBackend.exe，否则后端源码改动不会在开发时生效。
   const virtualEnvPython = join(APP_ROOT, '.venv', 'Scripts', 'python.exe')
   return {
     command: process.env.MOVIEPOP_PYTHON || (existsSync(virtualEnvPython) ? virtualEnvPython : 'python'),
