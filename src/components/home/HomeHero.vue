@@ -2,8 +2,9 @@
   <section class="showcase">
     <n-carousel
       v-if="items.length"
-      autoplay
-      draggable
+      :autoplay="canCarousel"
+      :draggable="canCarousel"
+      :show-dots="canCarousel"
       dot-type="line"
       class="hero-carousel"
     >
@@ -48,8 +49,9 @@
 
 <script setup>
 import { InformationCircleOutline, Play } from '@vicons/ionicons5'
+import { computed } from 'vue'
 
-defineProps({
+const props = defineProps({
   items: {
     type: Array,
     default: () => []
@@ -59,6 +61,8 @@ defineProps({
     default: false
   }
 })
+
+const canCarousel = computed(() => props.items.length > 1)
 
 defineEmits(['play', 'detail'])
 </script>
