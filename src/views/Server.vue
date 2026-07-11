@@ -624,9 +624,11 @@ function formatScanMessage(status) {
   if (!status) return '正在扫描...';
 
   if (status.stage === 'scan') {
+    const found = Number(status.filesFound || 0)
+    const suffix = found ? `（已发现 ${found} 个视频）` : ''
     return status.current
-      ? `正在扫描目录 ${status.current}`
-      : '正在扫描目录';
+      ? `正在扫描目录 ${status.current}${suffix}`
+      : `正在扫描目录${suffix}`;
   }
 
   if (status.stage === 'parse') {
@@ -901,7 +903,9 @@ async function removeFromSelectedPaths(index) {
         editData.port = editForm.port || ''
         editData.protocol = editForm.protocol
         editData.username = editForm.username || ''
-        editData.password = editForm.password || ''
+        if (editForm.password) {
+          editData.password = editForm.password
+        }
         editData.path = `${editForm.protocol}://${editForm.host}${port}${mainPath}`
       } else {
         editData.path = selectedPaths.value.join(',')

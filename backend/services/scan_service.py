@@ -319,12 +319,28 @@ def _collect_video_files(source: dict[str, Any]) -> list[str]:
             username=source.get("username", ""),
             password=source.get("password", ""),
         )
+        # 仅扫描用户保存的目录；不要用父目录替换用户的精确选择。
         roots = selected_paths if selected_paths is not None else ["/"]
         files = []
         for root in roots:
             if _is_cancelled(source_id):
                 break
-            files.extend(client.list_files_recursive(root, max_depth=int(config.SCAN_MAX_DEPTH or 2)))
+            def report_progress(directories: int, found: int, current_path: str) -> None:
+                _set_status(
+                    source_id,
+                    current=current_path,
+                    directoriesScanned=directories,
+                    filesFound=len(files) + found,
+                )
+
+            files.extend(
+                client.list_files_recursive(
+                    root,
+                    max_depth=int(config.SCAN_MAX_DEPTH or 2),
+                    progress_cb=report_progress,
+                    should_cancel=lambda: _is_cancelled(source_id),
+                )
+            )
         return _dedupe(files)
 
     if source_type == "openlist":

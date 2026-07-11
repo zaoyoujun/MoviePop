@@ -226,7 +226,7 @@ class WebDAVClient:
             logger.error(f"WebDAV 目录浏览失败 {path}: {e}")
             raise
 
-    def list_files_recursive(self, path: str = "/", max_depth: int = 2, progress_cb=None) -> list:
+    def list_files_recursive(self, path: str = "/", max_depth: int = 2, progress_cb=None, should_cancel=None) -> list:
         """
         递归列出所有视频文件（BFS 方式）
         :param path: 起始目录路径
@@ -241,6 +241,9 @@ class WebDAVClient:
             processed_dirs = set()
 
             while scan_queue:
+                if should_cancel and should_cancel():
+                    logger.info("远程扫描已取消")
+                    break
                 current_path, current_depth = scan_queue.pop(0)
                 if current_path in processed_dirs:
                     continue
