@@ -375,9 +375,13 @@ async def update_source(source_id: str, request: Request):
         source_type = source_service.normalize_type(body.get("type") or source.get("type") or "")
         updated = _build_source_payload({**source, **body}, source_type, source_id=source_id, existing=source)
 
-        old_mount_path = _normalize_mount_path(source.get("mount_path") or "")
-        new_mount_path = _normalize_mount_path(updated.get("mount_path") or "")
-        mount_changed = old_mount_path != new_mount_path
+        # mount_path 是 OpenList 的挂载点概念，WebDAV 与本地源不要求它。
+        # 之前在所有类型更新时都做严格校验，导致 WebDAV 选择目录后无法保存。
+        mount_changed = False
+        if source_type == "openlist":
+            old_mount_path = _normalize_mount_path(source.get("mount_path") or "")
+            new_mount_path = _normalize_mount_path(updated.get("mount_path") or "")
+            mount_changed = old_mount_path != new_mount_path
 
         for index, item in enumerate(sources):
             if item.get("id") == source_id:
