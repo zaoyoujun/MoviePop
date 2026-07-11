@@ -239,8 +239,9 @@ import DetailRecommend from '@/components/detail/DetailRecommend.vue'
 import Scrape from './Scrape.vue'
 
 import { startPlay } from '@/composables/usePlayer'
-import { addFavorite, getRecommendations, removeFavorite } from '@/api/movie'
+import { addFavorite, getMovieDetail, getRecommendations, removeFavorite } from '@/api/movie'
 import { apiUrl } from '@/api/request'
+import { isTestMode } from '@/utils/runtime'
 
 const route = useRoute()
 const router = useRouter()
@@ -433,24 +434,23 @@ async function fetchDetail() {
   relatedMovies.value = []
 
   try {
-    const response = await fetch(apiUrl(`/movies/${id}`))
-    if (response.ok) {
-      const result = await response.json()
-      if (result.code === 0 && result.data) {
-        detail.value = normalizeDetail(result.data)
-        isFavorite.value = detail.value.isFavorite || false
+    if (!isTestMode) {
+      // getMovieDetail normalizes local /covers and /static URLs for Electron.
+      detail.value = normalizeDetail(await getMovieDetail(id))
+      isFavorite.value = detail.value.isFavorite || false
 
-        try {
-          const recommendations = await getRecommendations(id, 8)
-          relatedMovies.value = Array.isArray(recommendations)
-            ? recommendations.map(normalizeRecommendItem)
-            : []
-        } catch (err) {
-          console.error('[MovieDetail] 推荐加载失败:', err)
-          relatedMovies.value = []
-        }
-        return
+      try {
+        const recommendations = await getRecommendations(id, 8)
+        relatedMovies.value = Array.isArray(recommendations)
+          ? recommendations.map(normalizeRecommendItem)
+          : []
+      } catch (err) {
+        console.error('[MovieDetail] 推荐加载失败:', err)
+        relatedMovies.value = []
       }
+      return
+    } else {
+      console.info('[MovieDetail] 测试模式已启用，使用模拟详情数据')
     }
   } catch (err) {
     console.error('[MovieDetail] API 不可用:', err)

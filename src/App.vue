@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import { darkTheme } from 'naive-ui'
 import { ScanToast, DetailTransition, WindowTitleBar } from '@/components/common'
+import { isTestMode } from '@/utils/runtime'
 
 const isDesktop = computed(() => window.location.protocol === 'file:' || Boolean(window.electronAPI))
 
@@ -24,6 +25,7 @@ const themeOverrides = {
     <n-message-provider>
       <n-notification-provider>
         <div class="app-frame" :class="{ 'app-frame--desktop': isDesktop }">
+          <div v-if="isTestMode" class="test-mode-banner">测试模式：当前使用模拟影视数据</div>
           <WindowTitleBar v-if="isDesktop" class="app-titlebar" />
           <div class="app-body">
             <router-view />
@@ -60,5 +62,19 @@ const themeOverrides = {
   min-height: 0;
   height: 100%;
   overflow: hidden;
+}
+
+.test-mode-banner {
+  position: fixed;
+  z-index: 1000;
+  right: 16px;
+  bottom: 16px;
+  padding: 8px 12px;
+  border: 1px solid rgba(255, 194, 72, 0.42);
+  border-radius: 8px;
+  color: #ffe6a6;
+  background: rgba(56, 35, 7, 0.9);
+  font-size: 12px;
+  pointer-events: none;
 }
 </style>

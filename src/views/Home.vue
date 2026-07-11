@@ -65,6 +65,7 @@ import { startPlay } from '@/composables/usePlayer'
 import { addFavorite, getHistory, getHomeData, removeFavorite } from '@/api/movie'
 import { saveScrollPosition, scheduleScrollRestore } from '@/utils/scrollRestoration'
 import { consumeScanCompleted } from '@/composables/useScanToast'
+import { isTestMode } from '@/utils/runtime'
 
 defineOptions({ name: 'Home' })
 
@@ -145,6 +146,20 @@ async function fetchHomeData() {
   abortController = new AbortController()
   loading.value = true
   loadError.value = ''
+
+  if (isTestMode) {
+    console.info('[Home] 测试模式已启用，使用模拟首页数据')
+    homeData.value = {
+      stats: MOCK_DATA.stats,
+      hero: MOCK_DATA.hero,
+      items: MOCK_DATA.items
+    }
+    continueHistory.value = MOCK_DATA.items.slice(0, 6)
+    loading.value = false
+    await nextTick()
+    scheduleScrollRestore(currentScrollKey())
+    return
+  }
 
   try {
     const params = new URLSearchParams({ limit: '200' })

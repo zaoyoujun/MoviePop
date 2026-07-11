@@ -5,9 +5,12 @@ const configuredBackendPort = portArgument?.split('=', 2)[1]
 const backendPort = /^(?:[1-9]\d{0,3}|[1-5]\d{4}|6(?:[0-4]\d{3}|5(?:[0-4]\d{2}|5(?:[0-2]\d|3[0-5]))))$/.test(configuredBackendPort || '')
   ? configuredBackendPort
   : '18987'
+const testModeArgument = process.argv.find((argument) => argument.startsWith('--moviepop-test-mode='))
+const testMode = testModeArgument?.endsWith('=1') || testModeArgument?.endsWith('=true')
 
 contextBridge.exposeInMainWorld('electronAPI', {
   getBackendPort: () => backendPort,
+  isTestMode: () => testMode,
   getAppPath: () => ipcRenderer.invoke('get-app-path'),
   minimizeWindow: () => ipcRenderer.invoke('window:minimize'),
   toggleMaximizeWindow: () => ipcRenderer.invoke('window:toggle-maximize'),

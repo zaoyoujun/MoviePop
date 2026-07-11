@@ -26,6 +26,8 @@ function isVideoUrl(url) {
 
 const BACKEND_PORT = process.env.MOVIEPOP_BACKEND_PORT || '18987'
 const BACKEND_PORT_ARGUMENT = `--moviepop-backend-port=${BACKEND_PORT}`
+const TEST_MODE = ['1', 'true'].includes(String(process.env.MOVIEPOP_TEST_MODE || '').toLowerCase())
+const TEST_MODE_ARGUMENT = `--moviepop-test-mode=${TEST_MODE ? '1' : '0'}`
 
 const getIconPath = () => {
   const packagedIcon = join(process.resourcesPath, 'icon.ico')
@@ -86,7 +88,7 @@ const startBackend = () => {
   backendProcess = spawn(launch.command, launch.args, {
     cwd: launch.cwd,
     windowsHide: true,
-    stdio: 'ignore',
+    stdio: ['ignore', 'pipe', 'pipe'],
     env: {
       ...process.env,
       MOVIEPOP_BACKEND_PORT: BACKEND_PORT,
@@ -95,6 +97,9 @@ const startBackend = () => {
   })
 
   backendProcess.unref()
+
+  forwardBackendOutput(backendProcess.stdout, console.log)
+  forwardBackendOutput(backendProcess.stderr, console.error)
 
   backendProcess.on('exit', () => {
     backendProcess = null
@@ -106,6 +111,21 @@ const startBackend = () => {
   })
 
   return true
+}
+
+function forwardBackendOutput(stream, log) {
+  if (!stream) return
+  let pending = ''
+  stream.setEncoding('utf8')
+  stream.on('data', (chunk) => {
+    pending += chunk
+    const lines = pending.split(/\r?\n/)
+    pending = lines.pop() || ''
+    lines.filter(Boolean).forEach((line) => log(`[MoviePop backend] ${line}`))
+  })
+  stream.on('end', () => {
+    if (pending) log(`[MoviePop backend] ${pending}`)
+  })
 }
 
 const waitForBackend = (timeoutMs = 30000) => new Promise((resolve) => {
@@ -167,7 +187,7 @@ const createWindow = () => {
       nodeIntegration: false,
       contextIsolation: true,
       preload: join(__dirname, 'preload.cjs'),
-      additionalArguments: [BACKEND_PORT_ARGUMENT],
+      additionalArguments: [BACKEND_PORT_ARGUMENT, TEST_MODE_ARGUMENT],
     },
   })
 
@@ -221,7 +241,7 @@ const createWindow = () => {
           nodeIntegration: false,
           contextIsolation: true,
           preload: join(__dirname, 'preload.cjs'),
-          additionalArguments: [BACKEND_PORT_ARGUMENT],
+          additionalArguments: [BACKEND_PORT_ARGUMENT, TEST_MODE_ARGUMENT],
         },
       },
     }

@@ -137,6 +137,8 @@ npm run electron:dev
 
 `npm run dev` 默认代理到手动启动的源码后端 `http://127.0.0.1:8000`。`npm run electron:dev` 会优先使用 `backend-dist/MoviePopBackend.exe`；若开发目录中没有该文件，则自动以 `.venv\Scripts\python.exe backend/run.py` 启动后端，并等待健康检查完成。可通过 `MOVIEPOP_PYTHON` 指定 Python 解释器，并通过 `MOVIEPOP_BACKEND_PORT` 修改 Electron 后端端口（默认 18987）。
 
+测试模式：桌面端以 `MOVIEPOP_TEST_MODE=1` 启动时会使用内置模拟影视数据；独立前端可设置 `VITE_TEST_MODE=true`。Electron 启动终端会以 `[MoviePop backend]` 前缀打印后端标准输出和错误日志。
+
 构建带播放器的发布版前，需要将 `mpv-2.dll`（或 `libmpv-2.dll` / `mpv-1.dll`）放入 `backend/player/`；也可设置 `MPV_DLL_PATH` 指向该 DLL。构建脚本会把该 DLL、PySide6、QML、着色器和 VapourSynth 资源一起打进后端 EXE。
 
 或者在 Windows 上双击 `start-frontend.bat` 一键启动。
