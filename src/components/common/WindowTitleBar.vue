@@ -75,52 +75,36 @@ function closeWindow() {
 
 <style scoped>
 .window-titlebar {
-  position: relative;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  height: 40px;
-  padding-left: 14px;
+  height: 34px;
+  padding-left: 12px;
   user-select: none;
   -webkit-app-region: drag;
 }
 
-.window-titlebar::before {
-  position: absolute;
-  top: 0;
-  right: 0;
-  left: 0;
-  height: 1px;
-  content: '';
-  background: linear-gradient(90deg, rgba(139, 124, 255, 0.62), rgba(91, 196, 247, 0.24) 45%, transparent 78%);
-  pointer-events: none;
-}
-
 .window-brand {
-  position: relative;
   display: inline-flex;
   align-items: center;
-  gap: 9px;
+  gap: 8px;
   min-width: 0;
-  color: rgba(252, 249, 255, 0.9);
-  font-size: 13.5px;
-  font-weight: 700;
-  letter-spacing: 0.01em;
+  color: rgba(248, 243, 233, 0.72);
+  font-size: 12px;
+  font-weight: 600;
 }
 
 .window-brand-mark {
   display: grid;
   place-items: center;
-  width: 24px;
-  height: 24px;
-  border: 1px solid rgba(214, 208, 255, 0.36);
-  border-radius: 8px;
+  width: 18px;
+  height: 18px;
+  border: 0;
+  border-radius: 5px;
   color: #fff;
-  background:
-    linear-gradient(145deg, rgba(255, 255, 255, 0.22), transparent 48%),
-    linear-gradient(135deg, #7a72ec, #6042ac);
-  box-shadow: 0 5px 14px rgba(89, 67, 174, 0.4);
-  font-size: 12px;
+  background: linear-gradient(135deg, #667eea, #764ba2);
+  box-shadow: none;
+  font-size: 11px;
   font-weight: 800;
 }
 
@@ -131,41 +115,37 @@ function closeWindow() {
 }
 
 .window-controls {
-  position: relative;
   display: flex;
   align-items: center;
-  height: 40px;
+  height: 34px;
   -webkit-app-region: no-drag;
 }
 
 .window-control {
   display: grid;
   place-items: center;
-  width: 48px;
-  height: 40px;
+  width: 46px;
+  height: 34px;
   border: 0;
-  color: rgba(229, 225, 240, 0.68);
+  color: rgba(248, 243, 233, 0.58);
   background: transparent;
   cursor: pointer;
   transition:
     color 0.15s ease,
-    background 0.15s ease,
-    box-shadow 0.15s ease;
+    background 0.15s ease;
 }
 
 .window-control:hover {
-  color: #fff;
-  background: rgba(255, 255, 255, 0.1);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+  color: rgba(255, 255, 255, 0.9);
+  background: rgba(255, 255, 255, 0.055);
 }
 
 .window-control--close:hover {
   color: #fff;
-  background: linear-gradient(135deg, #e95262, #c93445);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.2);
+  background: rgba(216, 59, 59, 0.82);
 }
 
 .window-control :deep(.n-icon) {
-  font-size: 17px;
+  font-size: 16px;
 }
 </style>
