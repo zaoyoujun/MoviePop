@@ -315,6 +315,7 @@ def _is_explicit_version_folder(raw: str, clean: str) -> bool:
         r"uhd",
         r"hdr",
         r"dolby\s*vision",
+        r"hdr10(?:\+)?",
         r"web\s*dl",
         r"web\s*rip",
         r"blu\s*ray",
@@ -368,7 +369,7 @@ def _is_explicit_version_folder(raw: str, clean: str) -> bool:
         return True
     patterns = [
         r"^(?:4k|8k|2160p|1080p|bd|blu-?ray|remux)\s*版$",
-        r"^(?:director'?s\s*cut|extended\s*cut|uncut|theatrical\s*cut)$",
+        r"^(?:director'?s?\s*cut|extended\s*cut|uncut|theatrical\s*cut)$",
         r"^(?:彩色|黑白|原色|导演剪辑|导剪|加长|未删减|无删减|修复|蓝光|国语|粤语|日语|英语|中字|配音).{0,6}版$",
         r".+版$",
     ]
@@ -404,7 +405,12 @@ def _same_title_key(left: str, right: str) -> bool:
 
 
 def _version_display(raw: str, clean: str) -> str:
-    return _clean_text(clean) or re.sub(r"\s+", " ", _normalize_text(raw)).strip()
+    raw_display = re.sub(r"[_\-.]+", " ", _normalize_text(raw)).strip()
+    # _clean_text deliberately strips release tokens from titles.  Keep them for
+    # version labels though, otherwise paths such as "4K HDR" become just "HDR".
+    if _is_explicit_version_folder(raw, clean):
+        return raw_display
+    return _clean_text(clean) or raw_display
 
 
 def _season_label_from_path(folder_parts: list[str], title: str, version_title: str = "") -> str:

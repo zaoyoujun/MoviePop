@@ -234,6 +234,58 @@ def _related_movies_for_detail(movie: dict) -> list[dict]:
     return related
 
 
+def _media_structure_for_detail(related_movies: list[dict]) -> dict:
+    """Build explicit season, variant and chapter axes for detail consumers."""
+    variants: dict[str, dict] = {}
+    seasons: dict[str, dict] = {}
+
+    for related in related_movies:
+        season_number = int(related.get("season") or 1)
+        season_title = str(related.get("season_title") or "").strip()
+        version_title = str(related.get("version_title") or "").strip()
+        chapter_name = str(related.get("chapter_name") or "").strip()
+        part = int(related.get("part") or 0)
+        season_key = f"S{season_number}:{season_title}"
+        variant_key = version_title or "default"
+        variant = variants.setdefault(variant_key, {
+            "id": f"variant:{variant_key}",
+            "name": version_title or "默认版本",
+            "versionTitle": version_title,
+            "isDefault": not version_title,
+            "seasons": [],
+        })
+        season = seasons.setdefault(season_key, {
+            "id": f"season:{season_key}",
+            "seasonNumber": season_number,
+            "seasonTitle": season_title,
+            "chapters": [],
+        })
+        chapter_label = chapter_name or (f"Part {part}" if part else "正片")
+        entry = {
+            "movieId": related.get("id", ""),
+            "seasonNumber": season_number,
+            "seasonTitle": season_title,
+            "versionTitle": version_title,
+            "chapterName": chapter_name,
+            "part": part,
+            "label": chapter_label,
+            "episodeCount": int(related.get("episode_count") or len(related.get("episodes") or [])),
+        }
+        if not any(item.get("movieId") == entry["movieId"] for item in season["chapters"]):
+            season["chapters"].append(entry)
+        variant["seasons"].append(entry)
+
+    for season in seasons.values():
+        season["chapters"].sort(key=lambda item: (item["part"], item["chapterName"], item["versionTitle"]))
+    for variant in variants.values():
+        variant["seasons"].sort(key=lambda item: (item["seasonNumber"], item["part"], item["chapterName"]))
+
+    variant_items = list(variants.values())
+    variant_items.sort(key=lambda item: (not item["isDefault"], item["name"]))
+    season_items = sorted(seasons.values(), key=lambda item: (item["seasonNumber"], item["seasonTitle"]))
+    return {"variants": variant_items, "seasons": season_items}
+
+
 def get_recommendations(movie_id: str, limit: int = 12) -> list[dict]:
     movie = get_movie_by_id(movie_id)
     if not movie:
@@ -698,6 +750,7 @@ def movie_to_detail(movie: dict) -> dict:
     detail["lastPlayTime"] = detail["playback"]["lastPlayTime"]
 
     related_movies = _related_movies_for_detail(movie)
+    detail["mediaStructure"] = _media_structure_for_detail(related_movies)
     
     season_map: dict[int, dict[str, Any]] = {}
     version_map: dict[str, dict[str, Any]] = {}
@@ -809,7 +862,9 @@ def movie_to_detail(movie: dict) -> dict:
 
     detail["seasons"] = sorted(season_map.values(), key=lambda x: x["seasonNumber"])
     detail["versions"] = list(version_map.values())
-    detail["hasVersions"] = len(detail["versions"]) > 1
+    # `versions` is kept for existing clients and may contain seasons.  The
+    # explicit structure distinguishes actual media variants from season choice.
+    detail["hasVersions"] = len(detail["mediaStructure"]["variants"]) > 1
     detail["hasMultipleSeasons"] = len(detail["seasons"]) > 1
     
     season_number = int(movie.get("season") or 1)

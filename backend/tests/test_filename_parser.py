@@ -8,9 +8,46 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from core.filename_parser import parse_video_filename, merge_series_videos
+from services import library_service
 
 
-def test_case(name, file_path, expected):
+def test_technical_version_directory_keeps_title_and_variant_label():
+    parsed = parse_video_filename("/movies/电视剧/Example Show/Season 01/4K HDR/Example.Show.S01E01.mkv")
+
+    assert parsed["title"] == "Example Show"
+    assert parsed["version_title"] == "4K HDR"
+
+
+def test_merge_separates_same_season_versions():
+    entries = merge_series_videos([
+        "/movies/电视剧/Example Show/Season 01/1080p WEB-DL/Example.Show.S01E01.mkv",
+        "/movies/电视剧/Example Show/Season 01/4K HDR/Example.Show.S01E01.mkv",
+    ])
+
+    assert {(entry["title"], entry["version_title"]) for entry in entries} == {
+        ("Example Show", "1080p WEB DL"),
+        ("Example Show", "4K HDR"),
+    }
+
+
+def test_detail_exposes_structured_variants_seasons_and_chapters(monkeypatch):
+    library = [
+        {"id": "show-s1-hd", "title": "Example Show", "series_title": "Example Show", "category": "电视剧", "season": 1, "version_title": "1080p WEB DL", "episodes": [1, 2], "files": ["s1e1", "s1e2"]},
+        {"id": "show-s1-4k", "title": "Example Show", "series_title": "Example Show", "category": "电视剧", "season": 1, "version_title": "4K HDR", "episodes": [1, 2], "files": ["s1-4k-e1", "s1-4k-e2"]},
+        {"id": "show-s2-part1", "title": "Example Show", "series_title": "Example Show", "category": "电视剧", "season": 2, "chapter_name": "Final Chapter", "part": 1, "episodes": [1], "files": ["s2e1"]},
+    ]
+    monkeypatch.setattr(library_service, "load_library", lambda: library)
+
+    detail = library_service.movie_to_detail(library[0])
+    structure = detail["mediaStructure"]
+
+    assert {variant["versionTitle"] for variant in structure["variants"]} == {"1080p WEB DL", "4K HDR", ""}
+    assert [season["seasonNumber"] for season in structure["seasons"]] == [1, 2]
+    assert structure["seasons"][1]["chapters"][0]["chapterName"] == "Final Chapter"
+    assert detail["hasVersions"] is True
+
+
+def run_case(name, file_path, expected):
     print(f"\n{'='*60}")
     print(f"测试: {name}")
     print(f"路径: {file_path}")
@@ -21,10 +58,10 @@ def test_case(name, file_path, expected):
     for key, value in expected.items():
         actual = result.get(key)
         if actual != value:
-            print(f"  ❌ {key}: 期望 {value}, 实际 {actual}")
+            print(f"  FAIL {key}: 期望 {value}, 实际 {actual}")
             passed = False
         else:
-            print(f"  ✅ {key}: {value}")
+            print(f"  PASS {key}: {value}")
     
     return passed
 
@@ -115,7 +152,7 @@ def run_tests():
     passed = 0
     failed = 0
     for name, path, expected in tests:
-        if test_case(name, path, expected):
+        if run_case(name, path, expected):
             passed += 1
         else:
             failed += 1
