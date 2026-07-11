@@ -91,6 +91,10 @@ MEDIA_CATEGORY_MAP = {
     "电视剧": "电视剧",
     "剧集": "电视剧",
     "tv": "电视剧",
+    "series": "电视剧",
+    "tv shows": "电视剧",
+    "tv series": "电视剧",
+    "shows": "电视剧",
     "电影": "电影",
 }
 
@@ -199,8 +203,8 @@ def _normalize_text(text: str) -> str:
     return unquote(str(text or "")).replace("_", " ").strip()
 
 
-def _clean_text(text: str) -> str:
-    """清理文本中的噪声信息"""
+def _clean_text(text: str, strip_year: bool = False) -> str:
+    """清理技术噪声，同时默认保留可能属于片名的年份数字。"""
     value = _normalize_text(text)
     for pattern in NOISE_PATTERNS:
         value = re.sub(pattern, " ", value, flags=re.IGNORECASE)
@@ -210,7 +214,8 @@ def _clean_text(text: str) -> str:
     value = re.sub(r"第\s*\d{1,3}\s*[集话話]", " ", value)
     value = re.sub(r"(?:Season\s*\d+|\bS\d{1,2}\b|第\s*[0-9一二三四五六七八九十两壹贰叁肆伍陆柒捌玖拾]+\s*(?:季|部|期|章))", " ", value, flags=re.IGNORECASE)
     value = re.sub(r"\[[0-9]{1,3}\s*-\s*[0-9]{1,3}\]", " ", value)
-    value = YEAR_PATTERN.sub(" ", value)
+    if strip_year:
+        value = YEAR_PATTERN.sub(" ", value)
     value = value.replace("/", " ").replace("\\", " ")
     value = re.sub(r"[\[\(（【].*?[\]\)）】]", " ", value)
     value = re.sub(r"[_\-.!]+", " ", value)
@@ -736,6 +741,24 @@ def _detect_episode(text: str) -> int | None:
     return None
 
 
+def _detect_fallback_episode(filename_stem: str, has_series_context: bool) -> int | None:
+    """Recognize common loose episode names only after a series signal exists."""
+    if not has_series_context:
+        return None
+
+    value = str(filename_stem or "").strip()
+    for pattern in (
+        r"\b(?:EP|Episode)\s*0*(?P<episode>\d{1,3})(?:v\d+)?\b",
+        r"第\s*0*(?P<episode>\d{1,3})\s*(?:集|话|話)",
+        r"^(?:\[)?0*(?P<episode>\d{1,3})(?:v\d+)?(?:\])?$",
+        r"^0*(?P<episode>\d{1,3})\s*[-~]\s*0*\d{1,3}$",
+    ):
+        match = re.search(pattern, value, re.IGNORECASE)
+        if match:
+            return int(match.group("episode"))
+    return None
+
+
 def _detect_special_type(*parts: str) -> str:
     """检测特殊类型（OVA、剧场版等）"""
     text = " ".join([str(part or "") for part in parts])
@@ -942,6 +965,19 @@ def _looks_like_season_folder(text: str) -> bool:
     return False
 
 
+def _title_from_mixed_season_folder(folder_name: str) -> str:
+    """Extract a title from loose folders such as ``Show.Name.S02.Complete``."""
+    value = _clean_text(folder_name)
+    if not value:
+        return ""
+    value = re.sub(r"\bS\d{1,2}E\d{1,3}\b", " ", value, flags=re.IGNORECASE)
+    value = re.sub(r"\bSeason\s*\d{1,2}\b|\bS\s*\d{1,2}\b", " ", value, flags=re.IGNORECASE)
+    value = re.sub(r"第\s*[0-9一二三四五六七八九十两壹贰叁肆伍陆柒捌玖拾]+\s*(?:季|部|期|章)", " ", value)
+    value = re.sub(r"\b(?:complete|collection|合集|全集|全\s*\d+\s*集)\b", " ", value, flags=re.IGNORECASE)
+    value = re.sub(r"\s+", " ", value).strip(" ._-")
+    return value if value and not _is_explicit_version_folder(value, value) else ""
+
+
 def _pick_title_candidate(parts: list[str], filename_stem: str, season: int | None, special_type: str) -> tuple[str, str]:
     """选择最合适的标题和季标签"""
     cleaned_parts = [
@@ -952,6 +988,16 @@ def _pick_title_candidate(parts: list[str], filename_stem: str, season: int | No
     season_label = ""
     
     if cleaned_parts:
+        # Fallback for downloader layouts that mix the title and season in a
+        # single directory, e.g. "Example.Show.S02.Complete/01.mkv".
+        for folder in reversed(cleaned_parts):
+            if not _looks_like_season_folder(folder):
+                continue
+            mixed_title = _title_from_mixed_season_folder(folder)
+            if mixed_title:
+                detected_season, detected_title = _detect_season(folder)
+                return mixed_title, detected_title or season_label
+
         parent = cleaned_parts[-1]
         grand_parent = cleaned_parts[-2] if len(cleaned_parts) >= 2 else ""
         great_grand_parent = cleaned_parts[-3] if len(cleaned_parts) >= 3 else ""
@@ -1237,8 +1283,11 @@ def parse_video_filename(file_path: str) -> dict:
     # 检测季数和季标题
     season, season_title = _detect_season(filename_stem, *folder_parts[-4:])
     
-    # 检测集数
+    # 检测集数。纯数字等宽松命名仅在路径已具备剧集上下文时启用。
     episode = _detect_episode(filename_stem)
+    if episode is None:
+        series_context = bool(season or special_type or any(_looks_like_season_folder(part) for part in folder_parts))
+        episode = _detect_fallback_episode(filename_stem, series_context)
     path_title, version_title = _title_and_version_from_path(folder_parts, episode)
     
     # 检测部分编号

@@ -47,6 +47,25 @@ def test_detail_exposes_structured_variants_seasons_and_chapters(monkeypatch):
     assert detail["hasVersions"] is True
 
 
+def test_fallback_parses_mixed_title_season_folder_and_numeric_episode():
+    parsed = parse_video_filename("/downloads/Example.Show.S02.Complete/03.mkv")
+
+    assert parsed["title"] == "Example Show"
+    assert parsed["season"] == 2
+    assert parsed["episode"] == 3
+    assert parsed["type"] == "series"
+
+
+def test_fallback_parses_ep_prefix_without_confusing_movie_numbers():
+    series = parse_video_filename("/archive/Example Show Season 03/EP007.mkv")
+    movie = parse_video_filename("/archive/Blade Runner 2049/Blade Runner 2049.mkv")
+
+    assert (series["title"], series["season"], series["episode"], series["type"]) == ("Example Show", 3, 7, "series")
+    assert movie["title"] == "Blade Runner 2049"
+    assert movie["episode"] is None
+    assert movie["type"] == "movie"
+
+
 def run_case(name, file_path, expected):
     print(f"\n{'='*60}")
     print(f"测试: {name}")
