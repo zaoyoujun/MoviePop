@@ -152,12 +152,18 @@ npm run build
 # 构建后端（Windows）
 npm run backend:build
 
-# 构建 Electron 应用
+# 构建 Windows 安装版（NSIS）
 npm run electron:build
+
+# 一键构建安装版（会先构建后端）
+npm run electron:installer
 
 # 构建便携版（Windows）
 npm run electron:portable
 ```
+
+Windows 数据保存位置：安装版与便携版均使用 `MoviePop.exe` 同目录的
+`MoviePopData\\backend\\`（配置、媒体库数据库、海报与日志）。安装到其他磁盘时，数据也会随程序保存在该磁盘。
 
 ## API 文档
 

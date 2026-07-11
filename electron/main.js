@@ -64,6 +64,10 @@ const getBackendDataDir = () => {
     if (portableDir) {
       return join(portableDir, 'MoviePopData', 'backend')
     }
+
+    // 安装版与便携版都把数据放在可执行文件同级，便于用户把程序和资料
+    // 一起迁移到任意磁盘，而不是写入系统用户目录。
+    return join(dirname(process.execPath), 'MoviePopData', 'backend')
   }
 
   return join(APP_ROOT, 'MoviePopData', 'backend')
