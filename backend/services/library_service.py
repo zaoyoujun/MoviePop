@@ -88,23 +88,30 @@ def _api_category(category: Any) -> str:
     return CATEGORY_API_MAPPING.get(value, value.lower())
 
 
+def _has_animation_metadata(movie: dict) -> bool:
+    """Detect animation from scraper metadata without changing directory category."""
+    animation_labels = {
+        "animation", "animated", "anime", "cartoon",
+        "动画", "动画片", "动漫", "番剧", "アニメ",
+    }
+    labels = [*_as_list(movie.get("genres")), *_as_list(movie.get("tags"))]
+    for label in labels:
+        normalized = re.sub(r"\s+", "", str(label or "")).lower()
+        if normalized in animation_labels:
+            return True
+    return str(movie.get("media_type") or "").strip().lower() in {"动画", "animation", "anime"}
+
+
 def _api_categories(movie: dict) -> list[str]:
     primary_category = _api_category(movie.get("category"))
     categories = {primary_category}
-    
-    genres = _as_list(movie.get("genres"))
-    has_animation_genre = any(
-        str(g).lower() in {"animation", "动画", "アニメ", "anime", "动漫"}
-        for g in genres
-    )
-    
+
     media_type = str(movie.get("media_type") or "").lower()
-    is_animation_type = media_type == "动画"
-    
     tmdb_media_type = str(movie.get("tmdb_media_type") or "").lower()
-    
-    has_animation = has_animation_genre or is_animation_type
-    
+    has_animation = _has_animation_metadata(movie)
+
+    # The directory decides the primary category. Scraper metadata contributes
+    # secondary browse categories, so animation films remain visible as movies.
     if primary_category == "movie" and has_animation:
         categories.add("anime")
     elif primary_category == "anime":

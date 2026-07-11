@@ -66,6 +66,21 @@ def test_fallback_parses_ep_prefix_without_confusing_movie_numbers():
     assert movie["type"] == "movie"
 
 
+def test_scraped_animation_movie_keeps_directory_category_and_gets_anime_category():
+    movie = library_service.movie_to_api_format({
+        "id": "toy-story",
+        "title": "Toy Story",
+        "category": "电影",
+        "media_type": "电影",
+        "tmdb_media_type": "movie",
+        "tags": ["Animation", "Family"],
+    })
+
+    assert movie["category"] == "movie"
+    assert movie["categories"] == ["anime", "movie"]
+    assert movie["type"] == "movie"
+
+
 def run_case(name, file_path, expected):
     print(f"\n{'='*60}")
     print(f"测试: {name}")
