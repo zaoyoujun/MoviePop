@@ -1564,8 +1564,17 @@ def _manual_scrape_search(keyword: str, source: str) -> list[dict[str, Any]]:
     source = (source or "auto").lower()
     if source == "auto":
         results: list[dict[str, Any]] = []
+        provider_errors: list[str] = []
         for item in ("anibk", "tmdb", "douban"):
-            results.extend(_manual_scrape_search(keyword, item))
+            try:
+                results.extend(_manual_scrape_search(keyword, item))
+            except Exception as exc:
+                # One provider being unavailable must not hide results from the
+                # remaining providers (for example, an expired TMDB key).
+                logger.warning("Manual scrape provider unavailable: source=%s error=%s", item, exc)
+                provider_errors.append(f"{item}: {exc}")
+        if not results and len(provider_errors) == 3:
+            raise RuntimeError(f"All scrape providers failed: {'; '.join(provider_errors)}")
         return _dedupe_manual_scrape_results(results)
     if source == "anibk":
         return _manual_search_anibk(keyword)

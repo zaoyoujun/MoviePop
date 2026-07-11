@@ -1,7 +1,8 @@
 # JMH-MoviePop 后端依赖
 fastapi==0.115.0
 uvicorn[standard]==0.30.0
-requests==2.32.0
+requests==2.32.3
 python-multipart==0.0.9
 beautifulsoup4==4.12.3
 yt-dlp==2024.10.22
+PySide6-Essentials>=6.8,<7

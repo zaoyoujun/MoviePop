@@ -1,5 +1,7 @@
 ﻿// API 请求封装
-export const API_ORIGIN = window.location.protocol === 'file:' ? 'http://127.0.0.1:18987' : ''
+const configuredBackendPort = window.electronAPI?.getBackendPort?.()
+const backendPort = /^\d+$/.test(configuredBackendPort || '') ? configuredBackendPort : '18987'
+export const API_ORIGIN = window.location.protocol === 'file:' ? `http://127.0.0.1:${backendPort}` : ''
 export const API_BASE = `${API_ORIGIN}/api`
 
 export function apiUrl(path) {

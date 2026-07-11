@@ -276,6 +276,10 @@ async function handleSearch() {
     })
     const data = await response.json()
 
+    if (!response.ok || data.code !== 0) {
+      throw new Error(data.message || `请求失败（HTTP ${response.status}）`)
+    }
+
     if (data.code === 0 && data.data && Array.isArray(data.data)) {
       searchResults.value = data.data.map(item => ({
         title: item.title || item.name || '',
@@ -286,7 +290,7 @@ async function handleSearch() {
         source: (item.source || scrapeSource.value).toLowerCase(),
         sourceLabel: getSourceLabel(item.source || scrapeSource.value),
         genres: item.genres || [],
-        countries: item.countries || item.country ? [item.country] : [],
+        countries: Array.isArray(item.countries) ? item.countries : (item.country ? [item.country] : []),
         raw: item
       }))
       showNoResult.value = searchResults.value.length === 0
@@ -297,6 +301,7 @@ async function handleSearch() {
   } catch (error) {
     searchResults.value = []
     showNoResult.value = true
+    alert(`搜索失败：${error.message || '无法连接后端服务'}`)
   } finally {
     isSearching.value = false
   }

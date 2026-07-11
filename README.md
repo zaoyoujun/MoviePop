@@ -121,12 +121,23 @@ components/
 # 安装依赖（在项目根目录）
 npm install
 
+# 安装 uv（若尚未安装）
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+
+# 创建隔离的后端环境并安装依赖
+uv venv .venv
+uv pip install --python .venv\Scripts\python.exe -r backend/requirements.txt
+
 # 启动前端开发服务器
 npm run dev
 
 # 启动 Electron 开发模式（同时启动前端和 Electron）
 npm run electron:dev
 ```
+
+`npm run dev` 默认代理到手动启动的源码后端 `http://127.0.0.1:8000`。`npm run electron:dev` 会优先使用 `backend-dist/MoviePopBackend.exe`；若开发目录中没有该文件，则自动以 `.venv\Scripts\python.exe backend/run.py` 启动后端，并等待健康检查完成。可通过 `MOVIEPOP_PYTHON` 指定 Python 解释器，并通过 `MOVIEPOP_BACKEND_PORT` 修改 Electron 后端端口（默认 18987）。
+
+构建带播放器的发布版前，需要将 `mpv-2.dll`（或 `libmpv-2.dll` / `mpv-1.dll`）放入 `backend/player/`；也可设置 `MPV_DLL_PATH` 指向该 DLL。构建脚本会把该 DLL、PySide6、QML、着色器和 VapourSynth 资源一起打进后端 EXE。
 
 或者在 Windows 上双击 `start-frontend.bat` 一键启动。
 

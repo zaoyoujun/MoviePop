@@ -11,6 +11,8 @@ const __dirname = dirname(__filename)
 let mainWindow
 let backendProcess
 
+const APP_ROOT = join(__dirname, '..')
+
 function isVideoUrl(url) {
   return url.includes('/v/') || 
          url.includes('/p/') || 
@@ -23,19 +25,38 @@ function isVideoUrl(url) {
 }
 
 const BACKEND_PORT = process.env.MOVIEPOP_BACKEND_PORT || '18987'
+const BACKEND_PORT_ARGUMENT = `--moviepop-backend-port=${BACKEND_PORT}`
 
 const getIconPath = () => {
   const packagedIcon = join(process.resourcesPath, 'icon.ico')
-  const fallbackIcon = join(__dirname, '..', 'public', '图标.ico')
+  const fallbackIcon = join(__dirname, '..', 'public', 'moviepop.ico')
   if (app.isPackaged && existsSync(packagedIcon)) return packagedIcon
   return fallbackIcon
 }
 
-const getBackendPath = () => (
-  app.isPackaged
-    ? join(process.resourcesPath, 'backend', 'MoviePopBackend.exe')
-    : join(__dirname, '..', 'frontend', 'backend-dist', 'MoviePopBackend.exe')
-)
+const getBackendLaunch = () => {
+  if (app.isPackaged) {
+    return {
+      command: join(process.resourcesPath, 'backend', 'MoviePopBackend.exe'),
+      args: [],
+      cwd: join(process.resourcesPath, 'backend'),
+    }
+  }
+
+  const packagedBackend = join(APP_ROOT, 'backend-dist', 'MoviePopBackend.exe')
+  if (existsSync(packagedBackend)) {
+    return { command: packagedBackend, args: [], cwd: dirname(packagedBackend) }
+  }
+
+  // Development checkouts normally do not contain backend-dist. Run the source
+  // backend so `npm run electron:dev` works without a separate server command.
+  const virtualEnvPython = join(APP_ROOT, '.venv', 'Scripts', 'python.exe')
+  return {
+    command: process.env.MOVIEPOP_PYTHON || (existsSync(virtualEnvPython) ? virtualEnvPython : 'python'),
+    args: ['backend/run.py'],
+    cwd: APP_ROOT,
+  }
+}
 
 const getBackendDataDir = () => {
   if (app.isPackaged) {
@@ -48,22 +69,22 @@ const getBackendDataDir = () => {
     }
   }
 
-  return join(__dirname, '..', 'MoviePopData', 'backend')
+  return join(APP_ROOT, 'MoviePopData', 'backend')
 }
 
 const startBackend = () => {
-  if (backendProcess) return
+  if (backendProcess) return true
 
-  const backendPath = getBackendPath()
-  if (!existsSync(backendPath)) {
-    console.warn(`MoviePop backend executable not found: ${backendPath}`)
-    return
+  const launch = getBackendLaunch()
+  if (app.isPackaged && !existsSync(launch.command)) {
+    console.warn(`MoviePop backend executable not found: ${launch.command}`)
+    return false
   }
 
   const backendDataDir = getBackendDataDir()
 
-  backendProcess = spawn(backendPath, [], {
-    cwd: dirname(backendPath),
+  backendProcess = spawn(launch.command, launch.args, {
+    cwd: launch.cwd,
     windowsHide: true,
     stdio: 'ignore',
     env: {
@@ -78,15 +99,28 @@ const startBackend = () => {
   backendProcess.on('exit', () => {
     backendProcess = null
   })
+
+  backendProcess.on('error', (error) => {
+    console.error(`MoviePop backend failed to start: ${error.message}`)
+    backendProcess = null
+  })
+
+  return true
 }
 
-const waitForBackend = (timeoutMs = 120000) => new Promise((resolve) => {
+const waitForBackend = (timeoutMs = 30000) => new Promise((resolve) => {
   const startedAt = Date.now()
 
   const check = () => {
-    const req = http.get(`http://127.0.0.1:${BACKEND_PORT}/api/movies/home?limit=1`, (res) => {
+    const req = http.get(`http://127.0.0.1:${BACKEND_PORT}/api/health`, (res) => {
       res.resume()
-      resolve(true)
+      if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
+        resolve(true)
+      } else if (Date.now() - startedAt >= timeoutMs) {
+        resolve(false)
+      } else {
+        setTimeout(check, 500)
+      }
     })
 
     req.on('error', () => {
@@ -133,11 +167,12 @@ const createWindow = () => {
       nodeIntegration: false,
       contextIsolation: true,
       preload: join(__dirname, 'preload.cjs'),
+      additionalArguments: [BACKEND_PORT_ARGUMENT],
     },
   })
 
   if (app.isPackaged) {
-    const indexPath = join(__dirname, '..', 'frontend', 'dist', 'renderer', 'index.html')
+    const indexPath = join(APP_ROOT, 'dist', 'renderer', 'index.html')
     mainWindow.loadFile(indexPath)
   } else {
     mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL || 'http://localhost:5173')
@@ -186,6 +221,7 @@ const createWindow = () => {
           nodeIntegration: false,
           contextIsolation: true,
           preload: join(__dirname, 'preload.cjs'),
+          additionalArguments: [BACKEND_PORT_ARGUMENT],
         },
       },
     }
@@ -206,9 +242,12 @@ const createWindow = () => {
 
 app.whenReady().then(async () => {
   Menu.setApplicationMenu(null)
-  startBackend()
-  if (app.isPackaged) {
-    await waitForBackend()
+  const backendStarted = startBackend()
+  if (backendStarted) {
+    const backendReady = await waitForBackend()
+    if (!backendReady) {
+      console.warn(`MoviePop backend did not become ready on port ${BACKEND_PORT}`)
+    }
   }
   createWindow()
 
@@ -258,7 +297,11 @@ ipcMain.handle('window:is-maximized', () => {
 
 ipcMain.handle('online:extract-video', async (_event, url) => {
   try {
-    const response = await fetch(`http://127.0.0.1:${BACKEND_PORT}/api/online/browse?url=${encodeURIComponent(url)}`)
+    const response = await fetch(`http://127.0.0.1:${BACKEND_PORT}/api/online/browse`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url }),
+    })
     return await response.json()
   } catch (error) {
     return { error: error.message }

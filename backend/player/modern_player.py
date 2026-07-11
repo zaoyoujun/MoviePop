@@ -16,11 +16,21 @@ from urllib.parse import parse_qs, quote, unquote, urlparse
 
 import requests
 
-PLAYER_DIR = Path(__file__).resolve().parent
+PLAYER_DIR = (
+    Path(getattr(sys, "_MEIPASS")) / "backend" / "player"
+    if getattr(sys, "frozen", False) and getattr(sys, "_MEIPASS", None)
+    else Path(__file__).resolve().parent
+)
 os.environ["PATH"] = str(PLAYER_DIR) + os.pathsep + os.environ.get("PATH", "")
 os.environ.setdefault("QT_OPENGL", "desktop")
 
-import mpv  # noqa: E402
+try:
+    # Package mode imports this module as backend.player.modern_player, so use
+    # the bundled sibling module instead of requiring a top-level mpv package.
+    from . import mpv  # noqa: E402
+except ImportError:
+    # Keep direct development execution (`python modern_player.py`) working.
+    import mpv  # type: ignore # noqa: E402
 
 from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import (
