@@ -165,6 +165,8 @@ npm run electron:portable
 Windows 数据保存位置：安装版与便携版均使用 `MoviePop.exe` 同目录的
 `MoviePopData\\backend\\`（配置、媒体库数据库、海报与日志）。安装到其他磁盘时，数据也会随程序保存在该磁盘。
 
+安装包已内置 libmpv 与 OpenList，普通用户无需手动下载播放器或 OpenList 依赖。源码构建时会自动从项目 Runtime Release 获取这两个大型 Windows 运行时文件。
+
 ## API 文档
 
 后端 API 接口文档详见 `docs/` 目录下的文档文件。

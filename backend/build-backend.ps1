@@ -13,6 +13,7 @@ $Python = Join-Path $ProjectRoot '.venv\Scripts\python.exe'
 $DistPath = Join-Path $ProjectRoot 'backend-dist'
 $WorkPath = Join-Path $ProjectRoot 'backend-build'
 $PlayerRoot = Join-Path $PSScriptRoot 'player'
+$RuntimeBootstrap = Join-Path $PSScriptRoot 'prepare-runtime.ps1'
 
 if (-not (Test-Path -LiteralPath $Python)) {
     throw "Python virtual environment not found: $Python. Run 'uv venv .venv' and 'uv pip install --python .venv\Scripts\python.exe -r backend\requirements.txt' first."
@@ -21,6 +22,17 @@ if (-not (Test-Path -LiteralPath $Python)) {
 $Uv = Get-Command uv -ErrorAction SilentlyContinue
 if ($null -eq $Uv) {
     throw "uv is required to install the isolated build dependency PyInstaller."
+}
+
+if (-not (Test-Path -LiteralPath $RuntimeBootstrap)) {
+    throw "Runtime bootstrap script not found: $RuntimeBootstrap"
+}
+
+# Downloads the prebuilt Windows runtime only when it is absent. This keeps a
+# clean checkout and GitHub Actions build free of manual dependency steps.
+& powershell -NoProfile -ExecutionPolicy Bypass -File $RuntimeBootstrap
+if ($LASTEXITCODE -ne 0) {
+    throw 'Failed to prepare bundled player and OpenList runtime files.'
 }
 
 $MpvDll = if ($env:MPV_DLL_PATH) {
@@ -43,7 +55,8 @@ if ($LASTEXITCODE -ne 0) {
 $PlayerData = @(
     @{ Source = (Join-Path $PlayerRoot 'qml'); Destination = 'backend\player\qml' },
     @{ Source = (Join-Path $PlayerRoot 'shaders'); Destination = 'backend\player\shaders' },
-    @{ Source = (Join-Path $PlayerRoot 'vapoursynth'); Destination = 'backend\player\vapoursynth' }
+    @{ Source = (Join-Path $PlayerRoot 'vapoursynth'); Destination = 'backend\player\vapoursynth' },
+    @{ Source = (Join-Path $PSScriptRoot 'openlist'); Destination = 'backend\openlist' }
 )
 foreach ($item in $PlayerData) {
     if (-not (Test-Path -LiteralPath $item.Source)) {
