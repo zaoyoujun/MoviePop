@@ -2,15 +2,22 @@ name: Build Windows installer
 
 on:
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Release tag to publish (for example v1.0.1); leave empty to build artifacts only
+        required: false
+        type: string
   push:
+    tags:
+      - 'v*'
   pull_request:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
-    name: Build NSIS installer
+    name: Build Windows packages
     runs-on: windows-latest
 
     steps:
@@ -38,13 +45,30 @@ jobs:
           uv venv .venv --python 3.12
           uv pip install --python .venv\Scripts\python.exe -r backend\requirements.txt
 
-      - name: Build NSIS installer
+      - name: Build installer and portable package
         shell: pwsh
-        run: npm run electron:installer
+        run: npm run electron:packages
 
-      - name: Upload Windows installer
+      - name: Upload Windows installer artifact
         uses: actions/upload-artifact@v4
         with:
           name: MoviePop-Windows-Installer
-          path: build/*Setup*.exe
+          path: build/*-nsis.exe
           if-no-files-found: error
+
+      - name: Upload Windows portable artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MoviePop-Windows-Portable
+          path: build/*-portable.exe
+          if-no-files-found: error
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v') || github.event.inputs.release_tag != ''
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.release_tag || github.ref_name }}
+          generate_release_notes: true
+          files: |
+            build/*-nsis.exe
+            build/*-portable.exe

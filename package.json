@@ -14,6 +14,7 @@
     "backend:build": "powershell -ExecutionPolicy Bypass -File backend/build-backend.ps1",
     "electron:build": "vite build && electron-builder",
     "electron:installer": "powershell -ExecutionPolicy Bypass -Command \"$env:NODE_TLS_REJECT_UNAUTHORIZED='0'; npm run backend:build; if ($?) { npm run build }; if ($?) { npx electron-builder --win nsis --publish never }\"",
+    "electron:packages": "powershell -ExecutionPolicy Bypass -Command \"$env:NODE_TLS_REJECT_UNAUTHORIZED='0'; npm run backend:build; if ($?) { npm run build }; if ($?) { npx electron-builder --win nsis portable --publish never }\"",
     "electron:portable": "powershell -ExecutionPolicy Bypass -Command \"$env:NODE_TLS_REJECT_UNAUTHORIZED='0'; npm run backend:build; if ($?) { npm run build }; if ($?) { npx electron-builder --win portable --publish never }\""
   },
   "build": {
@@ -22,6 +23,7 @@
     "directories": {
       "output": "build"
     },
+    "artifactName": "${productName}-${version}-${arch}-${target}.${ext}",
     "files": [
       "dist/renderer/**/*",
       "electron/**/*",
