@@ -13,8 +13,8 @@
     "electron:dev": "concurrently -k \"set \\\"MOVIEPOP_ELECTRON_DEV=1\\\" && vite\" \"wait-on http://localhost:5173 && electron .\"",
     "backend:build": "powershell -ExecutionPolicy Bypass -File backend/build-backend.ps1",
     "electron:build": "vite build && electron-builder",
-    "electron:installer": "powershell -ExecutionPolicy Bypass -Command \"$env:NODE_TLS_REJECT_UNAUTHORIZED='0'; npm run backend:build; if ($?) { npm run build }; if ($?) { npx electron-builder --win nsis }\"",
-    "electron:portable": "powershell -ExecutionPolicy Bypass -Command \"$env:NODE_TLS_REJECT_UNAUTHORIZED='0'; npm run backend:build; if ($?) { npm run build }; if ($?) { npx electron-builder --win portable }\""
+    "electron:installer": "powershell -ExecutionPolicy Bypass -Command \"$env:NODE_TLS_REJECT_UNAUTHORIZED='0'; npm run backend:build; if ($?) { npm run build }; if ($?) { npx electron-builder --win nsis --publish never }\"",
+    "electron:portable": "powershell -ExecutionPolicy Bypass -Command \"$env:NODE_TLS_REJECT_UNAUTHORIZED='0'; npm run backend:build; if ($?) { npm run build }; if ($?) { npx electron-builder --win portable --publish never }\""
   },
   "build": {
     "appId": "com.moviepop.app",
