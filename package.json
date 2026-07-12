@@ -23,7 +23,6 @@
     "directories": {
       "output": "build"
     },
-    "artifactName": "${productName}-${version}-${arch}-${target}.${ext}",
     "files": [
       "dist/renderer/**/*",
       "electron/**/*",
@@ -54,7 +53,11 @@
     },
     "nsis": {
       "oneClick": false,
-      "allowToChangeInstallationDirectory": true
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "${productName}-${version}-${arch}-nsis.${ext}"
+    },
+    "portable": {
+      "artifactName": "${productName}-${version}-${arch}-portable.${ext}"
     }
   },
   "dependencies": {
