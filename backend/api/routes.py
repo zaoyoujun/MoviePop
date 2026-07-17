@@ -228,6 +228,13 @@ async def list_sources():
 @router.post("/api/sources/verify")
 async def verify_source(request: Request):
     body = await _parse_request_body(request)
+    source_id = str(body.get("source_id") or body.get("sourceId") or "").strip()
+    if source_id and not str(body.get("password") or ""):
+        # 公开的源列表不返回密码。编辑已有 WebDAV 源时，允许验证接口
+        # 在请求未提供新密码的情况下复用其本地保存的密码。
+        saved_source = _find_source(source_id)
+        if saved_source and source_service.normalize_type(saved_source.get("type") or "") == "webdav":
+            body["password"] = saved_source.get("password") or ""
     source_type = source_service.normalize_type(body.get("type") or body.get("provider") or "")
     if source_type in {"web", "remote"}:
         source_type = "webdav"
@@ -260,7 +267,16 @@ async def browse_source_directory(request: Request):
     source_id = str(body.get("source_id") or body.get("sourceId") or "").strip()
     path = str(body.get("path") or "/").strip() or "/"
     if source_id:
-        return await browse_source_by_id(source_id, path)
+        saved_source = _find_source(source_id)
+        if not saved_source:
+            return api_response(code=404, message="Data source not found", data={"items": []})
+        # 保留编辑表单中的主机、端口等改动，但在密码字段为空时复用保存的密码。
+        # 这样添加目录不需要再次输入密码，也不会把密码暴露给渲染进程。
+        if source_service.normalize_type(body.get("type") or "") == "webdav":
+            if not str(body.get("password") or ""):
+                body["password"] = saved_source.get("password") or ""
+        else:
+            return await browse_source_by_id(source_id, path)
 
     source_type = source_service.normalize_type(body.get("type") or "")
     if source_type == "local":
@@ -359,9 +375,13 @@ async def update_source(source_id: str, request: Request):
         source_type = source_service.normalize_type(body.get("type") or source.get("type") or "")
         updated = _build_source_payload({**source, **body}, source_type, source_id=source_id, existing=source)
 
-        old_mount_path = _normalize_mount_path(source.get("mount_path") or "")
-        new_mount_path = _normalize_mount_path(updated.get("mount_path") or "")
-        mount_changed = old_mount_path != new_mount_path
+        # mount_path 是 OpenList 的挂载点概念，WebDAV 与本地源不要求它。
+        # 之前在所有类型更新时都做严格校验，导致 WebDAV 选择目录后无法保存。
+        mount_changed = False
+        if source_type == "openlist":
+            old_mount_path = _normalize_mount_path(source.get("mount_path") or "")
+            new_mount_path = _normalize_mount_path(updated.get("mount_path") or "")
+            mount_changed = old_mount_path != new_mount_path
 
         for index, item in enumerate(sources):
             if item.get("id") == source_id:
@@ -1564,8 +1584,17 @@ def _manual_scrape_search(keyword: str, source: str) -> list[dict[str, Any]]:
     source = (source or "auto").lower()
     if source == "auto":
         results: list[dict[str, Any]] = []
+        provider_errors: list[str] = []
         for item in ("anibk", "tmdb", "douban"):
-            results.extend(_manual_scrape_search(keyword, item))
+            try:
+                results.extend(_manual_scrape_search(keyword, item))
+            except Exception as exc:
+                # One provider being unavailable must not hide results from the
+                # remaining providers (for example, an expired TMDB key).
+                logger.warning("Manual scrape provider unavailable: source=%s error=%s", item, exc)
+                provider_errors.append(f"{item}: {exc}")
+        if not results and len(provider_errors) == 3:
+            raise RuntimeError(f"All scrape providers failed: {'; '.join(provider_errors)}")
         return _dedupe_manual_scrape_results(results)
     if source == "anibk":
         return _manual_search_anibk(keyword)

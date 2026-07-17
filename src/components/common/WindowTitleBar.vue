@@ -89,8 +89,8 @@ function closeWindow() {
   align-items: center;
   gap: 8px;
   min-width: 0;
-  color: rgba(248, 243, 233, 0.82);
-  font-size: 13px;
+  color: rgba(248, 243, 233, 0.72);
+  font-size: 12px;
   font-weight: 600;
 }
 
@@ -99,11 +99,13 @@ function closeWindow() {
   place-items: center;
   width: 18px;
   height: 18px;
+  border: 0;
   border-radius: 5px;
   color: #fff;
+  background: linear-gradient(135deg, #667eea, #764ba2);
+  box-shadow: none;
   font-size: 11px;
   font-weight: 800;
-  background: linear-gradient(135deg, #667eea, #764ba2);
 }
 
 .window-title {
@@ -125,7 +127,7 @@ function closeWindow() {
   width: 46px;
   height: 34px;
   border: 0;
-  color: rgba(248, 243, 233, 0.72);
+  color: rgba(248, 243, 233, 0.58);
   background: transparent;
   cursor: pointer;
   transition:
@@ -134,13 +136,13 @@ function closeWindow() {
 }
 
 .window-control:hover {
-  color: #fff7e8;
-  background: rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.9);
+  background: rgba(255, 255, 255, 0.055);
 }
 
 .window-control--close:hover {
   color: #fff;
-  background: #d83b3b;
+  background: rgba(216, 59, 59, 0.82);
 }
 
 .window-control :deep(.n-icon) {

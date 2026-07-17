@@ -10,6 +10,10 @@ import { NaiveUiResolver } from 'unplugin-vue-components/resolvers'
 
 export default defineConfig(({ mode }) => {
   const isProduction = mode === 'production'
+  const backendPort = process.env.MOVIEPOP_ELECTRON_DEV === '1'
+    ? (process.env.MOVIEPOP_BACKEND_PORT || '18987')
+    : '8000'
+  const backendTarget = process.env.VITE_API_TARGET || `http://127.0.0.1:${backendPort}`
   
   return {
     base: isProduction ? './' : '/',
@@ -19,11 +23,11 @@ export default defineConfig(({ mode }) => {
     server: {
       proxy: {
         '/api': {
-          target: process.env.VITE_API_TARGET || 'http://localhost:8000',
+          target: backendTarget,
           changeOrigin: true
         },
         '/covers': {
-          target: process.env.VITE_API_TARGET || 'http://localhost:8000',
+          target: backendTarget,
           changeOrigin: true
         }
       }

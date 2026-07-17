@@ -159,13 +159,17 @@ const openlistRunning = ref(false)
  * 验证数据源连接
  */
 async function verifySource() {
-  if (sourceForm.type === 'WebDAV' && !sourceForm.host.trim()) {
+  // 编辑弹窗和新建弹窗共用此回调；不能固定读取新建表单，
+  // 否则编辑 WebDAV 时会把空的 type/host 发给后端。
+  const form = showEditModal.value ? editForm : sourceForm
+
+  if (form.type === 'WebDAV' && !form.host.trim()) {
     alert('请先输入主机地址')
     return
   }
 
   // 内置OpenList需要选择驱动
-  if (sourceForm.type === '内置OpenList' && !sourceForm.driver.trim()) {
+  if (form.type === '内置OpenList' && !form.driver.trim()) {
     alert('请先选择存储驱动')
     return
   }
@@ -175,17 +179,22 @@ async function verifySource() {
   try {
     // 构建验证请求参数
     const verifyData = {
-      type: apiSourceType(sourceForm.type),
-      host: sourceForm.host.trim(),
-      port: sourceForm.port || '',
-      protocol: sourceForm.protocol,
-      username: sourceForm.username || '',
-      password: sourceForm.password || '',
-      driver: sourceForm.driver || '',
-      driver_type: sourceForm.driver_type || sourceForm.driver || '',
-      cookie: (sourceForm.cookie || '').trim()
+      type: apiSourceType(form.type),
+      host: form.host.trim(),
+      port: form.port || '',
+      protocol: form.protocol,
+      username: form.username || '',
+      password: form.password || '',
+      driver: form.driver || '',
+      driver_type: form.driver_type || form.driver || '',
+      cookie: (form.cookie || '').trim()
     }
-    Object.assign(verifyData, collectOpenListFields(sourceForm))
+    // 密码不会通过列表接口返回。编辑已保存的 WebDAV 时让后端按 ID
+    // 复用保存的密码，避免仅调整目录就变成匿名连接。
+    if (showEditModal.value && form.type === 'WebDAV' && editingSourceId.value) {
+      verifyData.source_id = editingSourceId.value
+    }
+    Object.assign(verifyData, collectOpenListFields(form))
 
     const data = await apiVerifySource(verifyData)
     if (data?.ok !== false) {
@@ -549,7 +558,10 @@ async function editSource() {
       editData.port = editForm.port || ''
       editData.protocol = editForm.protocol
       editData.username = editForm.username || ''
-      editData.password = editForm.password || ''
+      // 空密码表示“保持原密码”，不能覆盖掉后端已保存的凭据。
+      if (editForm.password) {
+        editData.password = editForm.password
+      }
       editData.path = `${editForm.protocol}://${editForm.host}${port}${mainPath}`
       editData.selected_paths = selectedPaths.value
     } else {
@@ -612,9 +624,11 @@ function formatScanMessage(status) {
   if (!status) return '正在扫描...';
 
   if (status.stage === 'scan') {
+    const found = Number(status.filesFound || 0)
+    const suffix = found ? `（已发现 ${found} 个视频）` : ''
     return status.current
-      ? `正在扫描目录 ${status.current}`
-      : '正在扫描目录';
+      ? `正在扫描目录 ${status.current}${suffix}`
+      : `正在扫描目录${suffix}`;
   }
 
   if (status.stage === 'parse') {
@@ -785,6 +799,9 @@ async function browseDirectory(path = '/') {
       driver_type: form.driver_type || form.driver || '',
       cookie: (form.cookie || '').trim()
     }
+    if (showEditModal.value && form.type === 'WebDAV' && editingSourceId.value) {
+      browseData.source_id = editingSourceId.value
+    }
     Object.assign(browseData, collectOpenListFields(form))
     const result = await apiBrowseDirectory(browseData)
 
@@ -886,7 +903,9 @@ async function removeFromSelectedPaths(index) {
         editData.port = editForm.port || ''
         editData.protocol = editForm.protocol
         editData.username = editForm.username || ''
-        editData.password = editForm.password || ''
+        if (editForm.password) {
+          editData.password = editForm.password
+        }
         editData.path = `${editForm.protocol}://${editForm.host}${port}${mainPath}`
       } else {
         editData.path = selectedPaths.value.join(',')
