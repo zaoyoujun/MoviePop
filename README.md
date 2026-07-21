@@ -160,7 +160,12 @@ npm run electron:installer
 
 # 构建便携版（Windows）
 npm run electron:portable
+
+# 一次构建安装版与便携版（CI 使用）
+npm run electron:packages
 ```
+
+GitHub Actions 会在每次推送或 PR 时生成两份 artifact。推送 `v*` 标签（如 `v1.0.1`），或手动运行工作流并填写发布标签时，会自动创建 GitHub Release 并上传安装版与便携版。
 
 Windows 数据保存位置：安装版与便携版均使用 `MoviePop.exe` 同目录的
 `MoviePopData\\backend\\`（配置、媒体库数据库、海报与日志）。安装到其他磁盘时，数据也会随程序保存在该磁盘。
