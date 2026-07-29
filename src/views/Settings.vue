@@ -203,6 +203,72 @@
         </n-form-item>
       </div>
 
+      <!-- 播放器设置 -->
+      <div class="player-section">
+        <n-h3>播放器</n-h3>
+        <p class="player-description">
+          AI 超分使用内置的 Anime4K 与 FSRCNNX 实时 GPU Shader；仅在片源需要放大时生效。
+        </p>
+
+        <n-form-item label="硬件解码">
+          <n-select
+            v-model:value="playerSettings.hwdec"
+            :options="playerHwdecOptions"
+            class="player-select"
+          />
+          <div class="input-tip">此项会在下次打开播放器时生效。</div>
+        </n-form-item>
+
+        <n-form-item label="默认画质增强">
+          <n-select
+            v-model:value="playerSettings.enhancement_profile"
+            :options="playerEnhancementOptions"
+            class="player-select"
+          />
+          <div class="input-tip">Anime4K 适合动漫；FSRCNNX 适合通用影片。AI 超分不会对不需要放大的 4K 片源重复处理。</div>
+        </n-form-item>
+
+        <n-form-item label="默认补帧">
+          <n-select
+            v-model:value="playerSettings.frame_profile"
+            :options="playerFrameOptions"
+            class="player-select"
+          />
+          <div class="input-tip">“显示插帧”会按显示器刷新率平滑展示；左上角会显示如 24 → 165 FPS。</div>
+        </n-form-item>
+
+        <n-form-item label="字幕">
+          <n-select
+            v-model:value="playerSettings.subtitle_mode"
+            :options="playerSubtitleOptions"
+            class="player-select"
+          />
+        </n-form-item>
+
+        <n-form-item label="默认音量">
+          <div class="player-volume-row">
+            <n-slider v-model:value="playerSettings.volume" :min="0" :max="100" :step="1" class="player-volume-slider" />
+            <span class="player-volume-value">{{ playerSettings.volume }}%</span>
+          </div>
+        </n-form-item>
+
+        <n-form-item label="播放信息">
+          <n-switch v-model:value="playerSettings.show_playback_info" />
+          <span class="switch-label">鼠标移入时显示画质与帧率</span>
+        </n-form-item>
+
+        <n-form-item label="窗口置顶">
+          <n-switch v-model:value="playerSettings.always_on_top" />
+          <span class="switch-label">新打开的播放器默认置顶</span>
+        </n-form-item>
+
+        <n-form-item label="操作">
+          <n-button type="primary" @click="savePlayerSettings">
+            保存播放器设置
+          </n-button>
+        </n-form-item>
+      </div>
+
       <!-- 高级设置 -->
       <div class="advanced-section">
         <n-h3>高级设置</n-h3>
@@ -279,6 +345,46 @@ const configLoaded = ref(false)
 const doubanCookie = ref('')
 const tmdbApiKey = ref('')
 
+// 播放器设置
+const playerSettings = ref({
+  hwdec: 'auto-copy',
+  enhancement_profile: 'original',
+  frame_profile: 'off',
+  subtitle_mode: 'auto',
+  show_playback_info: true,
+  always_on_top: false,
+  volume: 80
+})
+
+const playerHwdecOptions = [
+  { label: '自动（推荐）', value: 'auto-copy' },
+  { label: '安全自动', value: 'auto-safe' },
+  { label: '软件解码', value: 'no' }
+]
+
+const playerEnhancementOptions = [
+  { label: '原画', value: 'original' },
+  { label: '净化', value: 'clean' },
+  { label: '锐化', value: 'sharp' },
+  { label: '高清', value: 'clarity' },
+  { label: '动漫 AI 超分 · 性能（Anime4K）', value: 'anime_light' },
+  { label: '动漫 AI 超分 · 质量（Anime4K）', value: 'anime_strong' },
+  { label: '通用 AI 超分 · 性能（FSRCNNX）', value: 'ai_general' },
+  { label: '通用 AI 超分 · 质量（FSRCNNX）', value: 'ai_quality' }
+]
+
+const playerFrameOptions = [
+  { label: '关闭', value: 'off' },
+  { label: '自然', value: 'natural' },
+  { label: '平滑', value: 'smooth' },
+  { label: '显示插帧', value: 'display' }
+]
+
+const playerSubtitleOptions = [
+  { label: '自动选择', value: 'auto' },
+  { label: '默认关闭', value: 'off' }
+]
+
 /**
  * ==================== 语言选项 ====================
  */
@@ -313,6 +419,18 @@ async function loadConfig() {
   } catch (error) {
     console.log('加载配置失败:', error)
     configLoaded.value = true
+  }
+}
+
+async function loadPlayerSettings() {
+  try {
+    const response = await fetch(apiUrl('/settings/player'))
+    const data = await response.json()
+    if (data.code === 0 && data.data) {
+      playerSettings.value = { ...playerSettings.value, ...data.data }
+    }
+  } catch (error) {
+    console.log('加载播放器设置失败:', error)
   }
 }
 
@@ -476,6 +594,7 @@ async function onServerEnabledChange() {
 async function init() {
   await loadConfig()
   await getServerStatus()
+  await loadPlayerSettings()
 }
 
 init()
@@ -508,6 +627,28 @@ async function saveScraperSettings() {
     }
   } catch (error) {
     alert('保存失败：' + error.message)
+  }
+}
+
+async function savePlayerSettings() {
+  try {
+    const response = await fetch(apiUrl('/settings/player'), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(playerSettings.value)
+    })
+    const data = await response.json()
+    if (data.code === 0 && data.data) {
+      playerSettings.value = { ...playerSettings.value, ...data.data }
+      alert('播放器设置已保存。硬件解码、AI 超分和默认补帧会在下次打开播放器时生效。')
+    } else {
+      alert(data.message || '保存播放器设置失败')
+    }
+  } catch (error) {
+    console.log('保存播放器设置失败:', error)
+    alert('保存播放器设置失败，请稍后重试')
   }
 }
 
@@ -735,6 +876,49 @@ async function resetApp() {
   margin-top: 8px;
   color: #9ca3af;
   font-size: 13px;
+}
+
+/* ==================== 播放器设置区域样式 ==================== */
+.player-section {
+  margin-top: 32px;
+  padding: 24px;
+  border: 1px solid rgba(90, 135, 255, 0.18);
+  border-radius: 12px;
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.055), rgba(139, 92, 246, 0.035));
+}
+
+.player-section :deep(.n-h3) {
+  margin-bottom: 6px;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.player-description {
+  margin: 0 0 18px;
+  color: #9ca3af;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.player-select {
+  width: min(440px, 100%);
+}
+
+.player-volume-row {
+  display: flex;
+  align-items: center;
+  width: min(360px, 100%);
+  gap: 14px;
+}
+
+.player-volume-slider {
+  flex: 1;
+}
+
+.player-volume-value {
+  min-width: 42px;
+  color: #64748b;
+  font-variant-numeric: tabular-nums;
 }
 
 /* ==================== 高级设置区域样式 ==================== */

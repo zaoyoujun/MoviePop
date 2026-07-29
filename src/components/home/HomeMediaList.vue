@@ -14,17 +14,17 @@
     <div v-if="cards.length" class="media-rail">
       <div
         v-for="card in cards"
-        :key="card.id"
+        :key="card.cardKey || card.id"
         class="card-wrapper"
       >
         <article
           class="media-card"
-          :ref="(el) => setCardRef(card.id, el)"
+          :ref="(el) => setCardRef(card.cardKey || card.id, el)"
           @click="handleCardClick(card)"
-          @mousemove="handleMouseMove($event, card.id)"
-          @mouseleave="handleMouseLeave(card.id)"
+          @mousemove="handleMouseMove($event, card.cardKey || card.id)"
+          @mouseleave="handleMouseLeave(card.cardKey || card.id)"
         >
-          <img v-if="card.cover" :src="posterFor(card)" :alt="card.title" class="card-image" :style="getImageStyle(card.id)" />
+          <img v-if="card.cover" :src="posterFor(card)" :alt="card.title" class="card-image" :style="getImageStyle(card.cardKey || card.id)" />
           <div v-else class="no-poster">
             <n-icon size="32"><ImageOutline /></n-icon>
             <span>{{ card.title?.slice(0, 4) }}</span>
@@ -40,6 +40,13 @@
 
         <div class="card-bottom" @click="handleCardClick(card)">
           <strong>{{ card.title }}</strong>
+          <p
+            v-if="showPlayback && card.continueContext"
+            class="continue-context"
+            :title="card.continueContext"
+          >
+            {{ card.continueContext }}
+          </p>
           <div class="card-meta">
             <span>{{ card.source }}</span>
             <span v-if="card.year" class="meta-year">{{ formatYear(card.year) }}</span>
@@ -74,7 +81,8 @@ function setCardRef(id, el) {
 }
 
 async function handleCardClick(card) {
-  const el = cardRefs.get(card.id)
+  const cardKey = card.cardKey || card.id
+  const el = cardRefs.get(cardKey)
   if (!el) {
     router.push({ name: 'MovieDetail', params: { id: card.id } })
     return
@@ -126,6 +134,9 @@ function posterFor(card) {
 function progressFor(card) {
   const value = Number(card.progress ?? card.progressPercent ?? 0)
   if (Number.isFinite(value) && value > 0) return Math.max(0, Math.min(100, value))
+  // Continue-watching cards must only show persisted progress.  A generated
+  // percentage makes a just-started item look as if it was watched already.
+  if (props.showPlayback) return 0
   const seed = String(card.id || card.title || '').split('').reduce((sum, char) => sum + char.charCodeAt(0), 0)
   return [0, 19, 28, 42, 58, 68, 76, 87, 100][seed % 9]
 }
@@ -357,6 +368,18 @@ function formatYear(year) {
   color: #fff8ea;
   font-size: 16px;
   line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.continue-context {
+  margin: 6px 0 0;
+  overflow: hidden;
+  color: rgba(143, 202, 255, 0.86);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.35;
+  letter-spacing: 0.01em;
   text-overflow: ellipsis;
   white-space: nowrap;
 }

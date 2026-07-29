@@ -8,32 +8,36 @@
       <span>{{ currentEpisodes.length }} 集</span>
     </div>
 
-    <!-- 1. 选择第几季 -->
-    <div v-if="seasons.length > 1" class="season-selector">
-      <button
-        v-for="season in seasons"
-        :key="season.seasonNumber"
-        class="season-btn"
-        :class="{ active: currentSeasonNumber === season.seasonNumber }"
-        type="button"
-        @click="selectSeason(season.seasonNumber)"
-      >
-        {{ season.name }}
-      </button>
+    <!-- 一级：季；二级：当前季内的篇章或版本，始终分行呈现。 -->
+    <div v-if="seasons.length > 1" class="selector-row primary-selector-row">
+      <div class="season-selector compact">
+        <button
+          v-for="season in seasons"
+          :key="season.seasonNumber"
+          class="season-btn"
+          :class="{ active: currentSeasonNumber === season.seasonNumber }"
+          type="button"
+          @click="selectSeason(season.seasonNumber)"
+        >
+          {{ season.name }}
+        </button>
+      </div>
     </div>
 
-    <!-- 2. 选择章节（Part） -->
-    <div v-if="visibleChapters.length > 1" class="season-selector">
-      <button
-        v-for="chapter in visibleChapters"
-        :key="chapter.index"
-        class="season-btn"
-        :class="{ active: currentVersion === chapter.index }"
-        type="button"
-        @click="selectVersion(chapter.index)"
-      >
-        {{ chapter.item.name }}
-      </button>
+    <div v-if="visibleChapters.length > 1" class="selector-row secondary-selector-row">
+      <span class="selector-label">{{ chapterSelectorLabel }}</span>
+      <div class="season-selector compact">
+        <button
+          v-for="chapter in visibleChapters"
+          :key="chapter.index"
+          class="season-btn"
+          :class="{ active: currentVersion === chapter.index }"
+          type="button"
+          @click="selectVersion(chapter.index)"
+        >
+          {{ chapterOptionLabel(chapter.item) }}
+        </button>
+      </div>
     </div>
 
     <div class="episode-carousel">
@@ -128,18 +132,19 @@ const currentEpisodes = computed(() => {
 const visibleChapters = computed(() => {
   let filtered = props.versions
 
-  // 按当前季过滤出该季下的所有 Part
+  // 季导航项是聚合对象；按季号关联独立的版本/篇章条目。
   if (props.seasons.length > 1) {
-    const season = props.seasons.find(s => s.seasonNumber === currentSeasonNumber.value)
-    if (season) {
-      filtered = filtered.filter(v => v.movieId === season.id || v.id === season.id)
-    }
+    filtered = filtered.filter(v => Number(v.seasonNumber || 1) === Number(currentSeasonNumber.value))
   }
 
   return filtered.map((item) => ({
     item,
     index: props.versions.indexOf(item)
   }))
+})
+
+const chapterSelectorLabel = computed(() => {
+  return visibleChapters.value.some(({ item }) => item.part) ? '篇章 / 版本' : '版本'
 })
 
 const totalEpisodes = computed(() => {
@@ -162,14 +167,7 @@ const sectionTitle = computed(() => {
 
 function selectSeason(seasonNumber) {
   currentSeasonNumber.value = seasonNumber
-  const season = props.seasons.find(s => s.seasonNumber === seasonNumber)
-  if (!season) return
-  // 优先通过 season id 匹配对应版本（支持同一季拆分为多个 Part）
-  let index = props.versions.findIndex(v => v.movieId === season.id || v.id === season.id)
-  // 兜底：按 seasons 原顺序匹配
-  if (index < 0) {
-    index = props.seasons.findIndex(s => s.seasonNumber === seasonNumber)
-  }
+  let index = props.versions.findIndex(v => Number(v.seasonNumber || 1) === Number(seasonNumber))
   if (index >= 0) {
     currentVersion.value = index
   }
@@ -177,6 +175,18 @@ function selectSeason(seasonNumber) {
 
 function selectVersion(index) {
   currentVersion.value = index
+}
+
+function chapterOptionLabel(item) {
+  const part = Number(item.part || 0)
+  const chapterName = String(item.chapterName || '').trim()
+  const versionTitle = String(item.versionTitle || '').trim()
+
+  if (part) {
+    const label = `第 ${part} 篇`
+    return versionTitle && versionTitle !== chapterName ? `${label} · ${versionTitle}` : label
+  }
+  return versionTitle || chapterName || item.name || '默认版本'
 }
 
 function thumbnailFor(episode) {
@@ -226,21 +236,23 @@ function handleDoubleClick(episode) {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  margin-bottom: 18px;
+  padding-bottom: 28px;
+  margin-bottom: 38px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
 }
 
 .episode-header > span {
   color: rgba(255, 255, 255, 0.56);
-  font-size: 13px;
+  font-size: 21px;
 }
 
 .section-title {
   display: inline-flex;
   align-items: center;
-  gap: 10px;
+  gap: 14px;
   margin: 0;
   color: #fff;
-  font-size: 20px;
+  font-size: 34px;
   font-weight: 800;
 }
 
@@ -253,11 +265,37 @@ function handleDoubleClick(episode) {
   margin-bottom: 18px;
 }
 
+.selector-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 24px;
+  margin-bottom: 28px;
+}
+
+.primary-selector-row {
+  display: block;
+}
+
+.secondary-selector-row {
+  padding-top: 10px;
+}
+
+.selector-label {
+  flex: 0 0 132px;
+  padding-top: 15px;
+  color: rgba(255, 255, 255, 0.68);
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  white-space: nowrap;
+}
+
 .version-block {
   gap: 12px;
 }
 
 .season-selector.compact {
+  flex: 1;
   margin-bottom: 0;
 }
 
@@ -268,10 +306,10 @@ function handleDoubleClick(episode) {
 }
 
 .season-btn {
-  height: 34px;
-  padding: 0 14px;
+  min-height: 62px;
+  padding: 0 36px;
   border: 1px solid rgba(255, 255, 255, 0.16);
-  border-radius: 8px;
+  border-radius: 18px;
   color: rgba(255, 255, 255, 0.76);
   background: rgba(255, 255, 255, 0.055);
   cursor: pointer;
@@ -387,7 +425,8 @@ function handleDoubleClick(episode) {
   overflow: hidden;
   margin-top: 8px;
   color: #fff;
-  font-size: 13px;
+  font-size: 24px;
+  font-weight: 600;
   font-weight: 800;
   line-height: 1.25;
   text-align: center;
@@ -433,6 +472,24 @@ function handleDoubleClick(episode) {
 }
 
 @media (max-width: 768px) {
+  .selector-row {
+    display: block;
+    margin-bottom: 20px;
+  }
+
+  .selector-label {
+    display: block;
+    padding-top: 0;
+    margin-bottom: 12px;
+  }
+
+  .season-btn {
+    min-height: 46px;
+    padding: 0 20px;
+    border-radius: 13px;
+    font-size: 17px;
+  }
+
   .episode-carousel {
     grid-template-columns: 28px minmax(0, 1fr) 28px;
     gap: 6px;

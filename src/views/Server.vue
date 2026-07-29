@@ -644,7 +644,14 @@ function formatScanMessage(status) {
   }
 
   if (status.stage === 'done') {
-    return '扫描完成';
+    const summaries = []
+    const episodeUpdates = Number(status.episodesUpdated || 0)
+    const metadataReused = Number(status.metadataReused || 0)
+    const metadataScraped = Number(status.metadataScraped || 0)
+    if (episodeUpdates) summaries.push(`${episodeUpdates} 部资源有剧集更新`)
+    if (metadataReused) summaries.push(`复用 ${metadataReused} 条元数据`)
+    if (metadataScraped) summaries.push(`新刮削 ${metadataScraped} 条`)
+    return summaries.length ? `扫描完成：${summaries.join('，')}` : '扫描完成';
   }
 
   if (status.stage === 'error') {

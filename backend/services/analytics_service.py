@@ -125,16 +125,148 @@ def record_play_heartbeat(movie_id: str, episode_id: str = "", position: float =
             "episode_id": episode_id,
             "position": position,
             "duration": duration,
-            "delta_seconds": delta_seconds,
+            "delta_seconds": _watch_delta_seconds(delta_seconds),
             "playback_rate": playback_rate,
         })
 
 
-def build_personality_profile(days: int = 90) -> dict[str, Any]:
+def build_activity_summary(
+    days: int = 90,
+    movies: list[dict[str, Any]] | None = None,
+    events: list[dict[str, Any]] | None = None,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Build a date-bounded viewing activity summary from real playback data.
+
+    Library playback is a current-state snapshot, while behavior events retain
+    the time dimension that a statistics dashboard needs. Saved playback is a
+    lifetime snapshot, so it is deliberately not repurposed as a date-bounded
+    activity trend when events are unavailable.
+    """
     days = max(7, min(int(days or 90), 365))
-    movies = lib.load_library()
-    since = (datetime.now() - timedelta(days=days)).isoformat(timespec="seconds")
-    events = db_service.load_behavior_events(since)
+    now = now or datetime.now()
+    movies = list(movies) if movies is not None else lib.load_library()
+    today = now.date()
+    start_date = today - timedelta(days=days - 1)
+    start_at = datetime.combine(start_date, datetime.min.time())
+    events = _events_in_window(events if events is not None else db_service.load_behavior_events(), start_at, now)
+    unique_play_start_ids = _deduplicated_play_start_ids(events)
+    movie_index = {str(movie.get("id") or ""): movie for movie in movies if movie.get("id")}
+
+    daily_seconds: Counter[str] = Counter()
+    daily_plays: Counter[str] = Counter()
+    hour_counter: Counter[int] = Counter()
+    weekday_counter: Counter[int] = Counter()
+    movie_seconds: Counter[str] = Counter()
+    movie_plays: Counter[str] = Counter()
+    active_dates: set[str] = set()
+    activity_event_count = 0
+
+    for event in events:
+        event_type = str(event.get("event_type") or "").strip().lower()
+        if event_type not in {"play_start", "play_heartbeat", "play_end"}:
+            continue
+        played_at = _parse_time(event.get("created_at"))
+        if not played_at:
+            continue
+        if event_type == "play_start" and id(event) not in unique_play_start_ids:
+            continue
+
+        activity_event_count += 1
+        date_key = played_at.date().isoformat()
+        active_dates.add(date_key)
+        movie_id = str(event.get("movie_id") or "").strip()
+        delta_seconds = _watch_delta_seconds(event.get("delta_seconds"))
+
+        if event_type == "play_start":
+            daily_plays[date_key] += 1
+            hour_counter[played_at.hour] += 1
+            weekday_counter[played_at.weekday()] += 1
+            if movie_id:
+                movie_plays[movie_id] += 1
+
+        if delta_seconds:
+            daily_seconds[date_key] += delta_seconds
+            if movie_id:
+                movie_seconds[movie_id] += delta_seconds
+
+    watch_seconds = int(sum(daily_seconds.values()))
+    top_movie_ids = sorted(
+        set(movie_seconds) | set(movie_plays),
+        key=lambda movie_id: (movie_seconds.get(movie_id, 0), movie_plays.get(movie_id, 0), movie_id),
+        reverse=True,
+    )[:6]
+    top_titles = []
+    for movie_id in top_movie_ids:
+        movie = movie_index.get(movie_id) or {}
+        top_titles.append({
+            "id": movie_id,
+            "available": bool(movie),
+            "title": str(movie.get("metadata_title") or movie.get("title") or movie_id),
+            "category": _category(movie) if movie else "",
+            "coverUrl": str(movie.get("cover_url") or movie.get("backdrop_url") or ""),
+            "watchSeconds": int(movie_seconds.get(movie_id, 0)),
+            "watchMinutes": round(movie_seconds.get(movie_id, 0) / 60, 1),
+            "playCount": int(movie_plays.get(movie_id, 0)),
+        })
+
+    trend = []
+    for offset in range(days):
+        current_day = start_date + timedelta(days=offset)
+        date_key = current_day.isoformat()
+        seconds = daily_seconds.get(date_key, 0)
+        trend.append({
+            "date": date_key,
+            "label": f"{current_day.month}/{current_day.day}",
+            "value": round(seconds / 60, 1),
+            "minutes": round(seconds / 60, 1),
+            "playCount": int(daily_plays.get(date_key, 0)),
+        })
+
+    peak_hour = max(hour_counter, key=hour_counter.get) if hour_counter else None
+    current_streak, longest_streak = _streak_summary(active_dates, today)
+    active_days = len(active_dates)
+    play_count = int(sum(daily_plays.values()))
+    unique_titles = len({movie_id for movie_id in set(movie_seconds) | set(movie_plays) if movie_id})
+
+    return {
+        "days": days,
+        "dataSource": "events" if activity_event_count else "none",
+        "watchSeconds": watch_seconds,
+        "watchHours": round(watch_seconds / 3600, 1),
+        "activeDays": active_days,
+        "playCount": play_count,
+        "uniqueTitles": unique_titles,
+        "averageDailyMinutes": round(watch_seconds / max(1, active_days) / 60, 1) if active_days else 0,
+        "averageSessionMinutes": round(watch_seconds / play_count / 60, 1) if play_count else 0,
+        "currentStreak": current_streak,
+        "longestStreak": longest_streak,
+        "peakHour": peak_hour,
+        "dailyTrend": trend,
+        "hourDistribution": [
+            {"hour": hour, "label": f"{hour:02d}:00", "value": int(hour_counter.get(hour, 0))}
+            for hour in range(24)
+        ],
+        "weekdayDistribution": [
+            {"weekday": index, "label": label, "value": int(weekday_counter.get(index, 0))}
+            for index, label in enumerate(["周一", "周二", "周三", "周四", "周五", "周六", "周日"])
+        ],
+        "topTitles": top_titles,
+    }
+
+
+def build_personality_profile(
+    days: int = 90,
+    movies: list[dict[str, Any]] | None = None,
+    events: list[dict[str, Any]] | None = None,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    days = max(7, min(int(days or 90), 365))
+    now = now or datetime.now()
+    start_date = now.date() - timedelta(days=days - 1)
+    start_at = datetime.combine(start_date, datetime.min.time())
+    movies = list(movies) if movies is not None else lib.load_library()
+    events = _events_in_window(events if events is not None else db_service.load_behavior_events(), start_at, now)
     features = _build_features(movies, events, days)
 
     if not _has_enough_data(features):
@@ -158,18 +290,17 @@ def _build_features(movies: list[dict[str, Any]], events: list[dict[str, Any]], 
     viewing_units = _viewing_units(movies)
     watched = [unit for unit in viewing_units if _is_watched(unit)]
     completed = [unit for unit in watched if _playback_percent(unit) >= 90]
-    play_events = [e for e in events if e.get("event_type") == "play_start"]
+    unique_play_start_ids = _deduplicated_play_start_ids(events)
+    play_events = [e for e in events if _normalize_event_type(e.get("event_type")) == "play_start" and id(e) in unique_play_start_ids]
     heartbeat_events = [e for e in events if e.get("event_type") == "play_heartbeat"]
     seek_forward = [e for e in events if e.get("event_type") == "seek_forward"]
     seek_backward = [e for e in events if e.get("event_type") == "seek_backward"]
     pause_events = [e for e in events if e.get("event_type") == "pause"]
 
-    watch_seconds = sum(max(0, _safe_float(e.get("delta_seconds"))) for e in heartbeat_events)
-    if watch_seconds <= 0:
-        watch_seconds = sum(_watch_seconds(movie) or _current_time(movie) for movie in watched)
+    watch_seconds = sum(_watch_delta_seconds(e.get("delta_seconds")) for e in heartbeat_events)
 
     speed_seconds = sum(
-        max(0, _safe_float(e.get("delta_seconds")))
+        _watch_delta_seconds(e.get("delta_seconds"))
         for e in heartbeat_events
         if _safe_float(e.get("playback_rate"), 1) > 1.05
     )
@@ -186,12 +317,17 @@ def _build_features(movies: list[dict[str, Any]], events: list[dict[str, Any]], 
 
     active_dates = set()
     for event in events:
+        event_type = _normalize_event_type(event.get("event_type"))
+        if event_type == "play_start" and id(event) not in unique_play_start_ids:
+            continue
+        if event_type not in {"play_start", "play_heartbeat", "play_end"}:
+            continue
         dt = _parse_time(event.get("created_at"))
         if not dt:
             continue
         active_dates.add(dt.date().isoformat())
-        delta = max(0, _safe_float(event.get("delta_seconds")))
-        if event.get("event_type") == "play_start":
+        delta = _watch_delta_seconds(event.get("delta_seconds"))
+        if event_type == "play_start":
             hour_counter[dt.hour] += 1
             weekday_counter[dt.weekday()] += 1
             movie_id = str(event.get("movie_id") or "")
@@ -200,14 +336,6 @@ def _build_features(movies: list[dict[str, Any]], events: list[dict[str, Any]], 
             source_counter[str(event.get("source_page") or "unknown")] += 1
         if delta:
             daily_seconds[dt.date().isoformat()] += delta
-
-    if not hour_counter:
-        for movie in watched:
-            dt = _parse_time(_playback(movie).get("last_play_time"))
-            if dt:
-                hour_counter[dt.hour] += 1
-                weekday_counter[dt.weekday()] += 1
-                active_dates.add(dt.date().isoformat())
 
     category_counter: Counter[str] = Counter()
     favorite_category_counter: Counter[str] = Counter()
@@ -218,12 +346,10 @@ def _build_features(movies: list[dict[str, Any]], events: list[dict[str, Any]], 
             favorite_category_counter[_primary_label(movie)] += 1
 
     session_minutes = [
-        max(0.0, _safe_float(e.get("delta_seconds"))) / 60
+        _watch_delta_seconds(e.get("delta_seconds")) / 60
         for e in heartbeat_events
-        if _safe_float(e.get("delta_seconds")) > 0
+        if _watch_delta_seconds(e.get("delta_seconds")) > 0
     ]
-    if not session_minutes:
-        session_minutes = [max(0.0, (_watch_seconds(movie) or _current_time(movie)) / 60) for movie in watched if (_watch_seconds(movie) or _current_time(movie)) > 0]
 
     top_counts = [count for _label, count in category_counter.most_common()]
     genre_total = sum(top_counts)
@@ -239,7 +365,7 @@ def _build_features(movies: list[dict[str, Any]], events: list[dict[str, Any]], 
         "watchedCount": len(watched),
         "completedCount": len(completed),
         "activeDays": len(active_dates),
-        "eventCount": len(events),
+        "eventCount": len(play_events) + len(heartbeat_events),
         "playCount": len(play_events),
         "watchSeconds": int(watch_seconds),
         "completionRate": _ratio(len(completed), len(watched)),
@@ -411,6 +537,36 @@ def _viewing_units(movies: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return units
 
 
+def _streak_summary(active_dates: set[str], today) -> tuple[int, int]:
+    parsed_dates = set()
+    for value in active_dates:
+        try:
+            parsed_dates.add(datetime.fromisoformat(str(value)).date())
+        except ValueError:
+            continue
+
+    if not parsed_dates:
+        return 0, 0
+
+    current_streak = 0
+    cursor = today
+    while cursor in parsed_dates:
+        current_streak += 1
+        cursor -= timedelta(days=1)
+
+    longest_streak = 0
+    streak = 0
+    previous = None
+    for current in sorted(parsed_dates):
+        if previous and current == previous + timedelta(days=1):
+            streak += 1
+        else:
+            streak = 1
+        longest_streak = max(longest_streak, streak)
+        previous = current
+    return current_streak, longest_streak
+
+
 def _primary_label(movie: dict[str, Any]) -> str:
     for key in ("genres", "tags"):
         value = movie.get(key)
@@ -461,6 +617,43 @@ def _normalize_event_type(value: Any) -> str:
     return str(value or "").strip().lower().replace("-", "_")
 
 
+def _events_in_window(events: list[dict[str, Any]], start_at: datetime, end_at: datetime) -> list[dict[str, Any]]:
+    """Use parsed local datetimes instead of lexicographic ISO comparisons."""
+    return [
+        event for event in events
+        if (created_at := _parse_time(event.get("created_at"))) and start_at <= created_at <= end_at
+    ]
+
+
+def _deduplicated_play_start_ids(events: list[dict[str, Any]], window_seconds: int = 12) -> set[int]:
+    """Collapse the legacy preflight/player/stream start triplet into one play."""
+    unique_ids: set[int] = set()
+    last_start_by_target: dict[tuple[str, str], datetime] = {}
+    sorted_events = sorted(events, key=lambda event: _parse_time(event.get("created_at")) or datetime.min)
+    for event in sorted_events:
+        if _normalize_event_type(event.get("event_type")) != "play_start":
+            continue
+        created_at = _parse_time(event.get("created_at"))
+        if not created_at:
+            unique_ids.add(id(event))
+            continue
+        target = (str(event.get("movie_id") or "").strip(), str(event.get("episode_id") or "").strip())
+        previous = last_start_by_target.get(target)
+        if previous and 0 <= (created_at - previous).total_seconds() <= window_seconds:
+            continue
+        unique_ids.add(id(event))
+        last_start_by_target[target] = created_at
+    return unique_ids
+
+
+def _watch_delta_seconds(value: Any) -> float:
+    """Keep a malformed heartbeat from overstating viewing time."""
+    seconds = _safe_float(value)
+    if not math.isfinite(seconds):
+        return 0.0
+    return min(120.0, max(0.0, seconds))
+
+
 def _safe_float(value: Any, default: float = 0.0) -> float:
     try:
         return float(value)
@@ -508,6 +701,7 @@ def _parse_time(value: Any) -> datetime | None:
     if not text:
         return None
     try:
-        return datetime.fromisoformat(text.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        return parsed.astimezone().replace(tzinfo=None) if parsed.tzinfo else parsed
     except ValueError:
         return None

@@ -45,8 +45,8 @@ export function getHistory(params = {}) {
 }
 
 // 获取统计数据
-export function getStats() {
-  return get('/movies/stats')
+export function getStats(params = {}) {
+  return get('/movies/stats', params)
 }
 
 // ==================== MPV 播放器控制 ====================

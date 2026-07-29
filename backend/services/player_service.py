@@ -74,6 +74,12 @@ class PlayerInstance:
 
                 self.player_log_path.parent.mkdir(parents=True, exist_ok=True)
                 self._control_port = self._allocate_control_port()
+                config = AppConfig()
+                config.load_config()
+                player_context = dict(context or {})
+                # The standalone player gets a validated snapshot at launch;
+                # it never needs to read or trust arbitrary browser input.
+                player_context["playerPreferences"] = config.get_player_settings()
                 with open(self.player_log_path, "ab") as log_file:
                     log_file.write(b"\n========== player start ==========\n")
                     self.player_process = self._start_process(
@@ -83,7 +89,7 @@ class PlayerInstance:
                         title or "",
                         max(0, int(position or 0)),
                         self._control_port,
-                        context or {},
+                        player_context,
                         log_file,
                     )
 
@@ -97,7 +103,7 @@ class PlayerInstance:
                     return False
 
                 self._last_play_time = now
-                self.current_context = dict(context or {})
+                self.current_context = dict(player_context)
                 self.current_context.update({
                     "url": url,
                     "position": max(0, int(position or 0)),

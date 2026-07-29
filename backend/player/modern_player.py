@@ -67,6 +67,28 @@ USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
 )
+PLAYER_PREFERENCE_DEFAULTS = {
+    "hwdec": "auto-copy",
+    "enhancement_profile": "original",
+    "frame_profile": "off",
+    "subtitle_mode": "auto",
+    "show_playback_info": True,
+    "always_on_top": False,
+    "volume": 80,
+}
+PLAYER_HWDEC_VALUES = {"auto-copy", "auto-safe", "no"}
+PLAYER_ENHANCEMENT_PROFILE_IDS = {
+    "original",
+    "clean",
+    "sharp",
+    "clarity",
+    "anime_light",
+    "anime_strong",
+    "ai_general",
+    "ai_quality",
+}
+PLAYER_FRAME_PROFILE_IDS = {"off", "natural", "smooth", "display"}
+PLAYER_SUBTITLE_MODES = {"auto", "off"}
 ES_CONTINUOUS = 0x80000000
 ES_SYSTEM_REQUIRED = 0x00000001
 ES_DISPLAY_REQUIRED = 0x00000002
@@ -142,6 +164,176 @@ def _as_text(value: Any) -> str:
     return str(value)
 
 
+def _preference_bool(value: Any, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    return _as_text(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _preference_choice(value: Any, default: str, allowed: set[str]) -> str:
+    candidate = _as_text(value).strip()
+    return candidate if candidate in allowed else default
+
+
+def _normalize_player_preferences(value: Any) -> dict[str, Any]:
+    """Accept only the small settings snapshot emitted by the backend."""
+    source = value if isinstance(value, dict) else {}
+    try:
+        volume = int(float(source.get("volume", PLAYER_PREFERENCE_DEFAULTS["volume"])))
+    except (TypeError, ValueError):
+        volume = int(PLAYER_PREFERENCE_DEFAULTS["volume"])
+    return {
+        "hwdec": _preference_choice(
+            source.get("hwdec"),
+            str(PLAYER_PREFERENCE_DEFAULTS["hwdec"]),
+            PLAYER_HWDEC_VALUES,
+        ),
+        "enhancement_profile": _preference_choice(
+            source.get("enhancement_profile"),
+            str(PLAYER_PREFERENCE_DEFAULTS["enhancement_profile"]),
+            PLAYER_ENHANCEMENT_PROFILE_IDS,
+        ),
+        "frame_profile": _preference_choice(
+            source.get("frame_profile"),
+            str(PLAYER_PREFERENCE_DEFAULTS["frame_profile"]),
+            PLAYER_FRAME_PROFILE_IDS,
+        ),
+        "subtitle_mode": _preference_choice(
+            source.get("subtitle_mode"),
+            str(PLAYER_PREFERENCE_DEFAULTS["subtitle_mode"]),
+            PLAYER_SUBTITLE_MODES,
+        ),
+        "show_playback_info": _preference_bool(
+            source.get("show_playback_info"),
+            bool(PLAYER_PREFERENCE_DEFAULTS["show_playback_info"]),
+        ),
+        "always_on_top": _preference_bool(
+            source.get("always_on_top"),
+            bool(PLAYER_PREFERENCE_DEFAULTS["always_on_top"]),
+        ),
+        "volume": int(_clamp(volume, 0, 100)),
+    }
+
+
+def _profile_index(profiles: list[dict[str, Any]], profile_id: str) -> int:
+    for index, profile in enumerate(profiles):
+        if str(profile.get("id") or "") == profile_id:
+            return index
+    return 0
+
+
+def _positive_number(value: Any) -> Optional[float]:
+    """Return a usable numeric MPV property value, or ``None`` when unavailable."""
+    if isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(number) or number <= 0:
+        return None
+    return number
+
+
+def _first_positive_number(*values: Any) -> Optional[float]:
+    for value in values:
+        number = _positive_number(value)
+        if number is not None:
+            return number
+    return None
+
+
+def _video_size_from_params(value: Any) -> Optional[tuple[int, int]]:
+    """Read dimensions from MPV's video parameter node map."""
+    if not isinstance(value, dict):
+        return None
+    for width_key, height_key in (("w", "h"), ("dw", "dh")):
+        width = _positive_number(value.get(width_key))
+        height = _positive_number(value.get(height_key))
+        if width is not None and height is not None:
+            return max(1, int(round(width))), max(1, int(round(height)))
+    return None
+
+
+def _source_quality_label(size: Optional[tuple[int, int]]) -> str:
+    """Turn source dimensions into a compact, player-friendly quality label."""
+    if size is None:
+        return ""
+    width, height = size
+    long_edge = max(width, height)
+    short_edge = min(width, height)
+    if long_edge >= 7680 or short_edge >= 4320:
+        return "8K"
+    if long_edge >= 3840 or short_edge >= 2160:
+        return "4K"
+    if long_edge >= 2560 or short_edge >= 1440:
+        return "2K"
+    if short_edge >= 1080:
+        return "1080P"
+    if short_edge >= 720:
+        return "720P"
+    return f"{height}P"
+
+
+def _source_hdr_label(params: dict[str, Any]) -> str:
+    gamma = str(params.get("gamma") or params.get("gamma-curve") or "").strip().lower()
+    gamma = gamma.replace("_", "-")
+    if gamma in {"pq", "st2084", "st-2084", "smpte2084", "bt.2100-pq"}:
+        return "HDR10"
+    if gamma in {"hlg", "arib-std-b67", "arib-std-b-67"}:
+        return "HLG"
+    return ""
+
+
+def _source_fps_label(value: Optional[float]) -> str:
+    if value is None:
+        return ""
+    rounded = int(round(value))
+    if abs(value - rounded) < 0.25:
+        return f"{rounded} FPS"
+    return f"{value:.2f}".rstrip("0").rstrip(".") + " FPS"
+
+
+def _display_hz_label(value: Optional[float]) -> str:
+    """Format a display refresh rate without presenting it as source FPS."""
+    if value is None:
+        return ""
+    rounded = int(round(value))
+    if abs(value - rounded) < 0.25:
+        return str(rounded)
+    return f"{value:.2f}".rstrip("0").rstrip(".")
+
+
+def _mpv_option_is_enabled(value: Any) -> bool:
+    """Accept both python-mpv booleans and MPV's textual yes/no values."""
+    if isinstance(value, bool):
+        return value
+    return _as_text(value).strip().lower() in {"1", "on", "true", "yes"}
+
+
+def _video_fps_badge_label(info: dict[str, Any]) -> str:
+    """Build a concise source-to-display frame-rate label.
+
+    The right-hand value is the current display cadence, not a claim that the
+    media stream itself was re-encoded at that FPS.  Keeping that distinction
+    here lets the badge stay simple while avoiding a misleading diagnostic.
+    """
+    source_value = _display_hz_label(info.get("fps"))
+    if not source_value:
+        return ""
+    if not info.get("display_interpolation_enabled"):
+        return f"{source_value} FPS"
+
+    display_hz = _display_hz_label(info.get("display_hz"))
+    if not display_hz:
+        return f"{source_value} FPS"
+    if info.get("display_sync_active"):
+        return f"{source_value} → {display_hz} FPS"
+    return f"{source_value} FPS · 显示帧率 {display_hz} FPS"
+
+
 class ModernMpvPlayer(QOpenGLWidget):
     frame_ready = Signal()
     file_loaded_signal = Signal()
@@ -164,6 +356,7 @@ class ModernMpvPlayer(QOpenGLWidget):
         self.start_position = max(0, int(start_position or 0))
         self._initial_seek_done = self.start_position <= 0
         self.playback_context = playback_context or {}
+        self.player_preferences = _normalize_player_preferences(self.playback_context.get("playerPreferences"))
         self.playback_movie_id, self.playback_episode_id, self.playback_api_base = self._resolve_playback_target(
             video_path,
             self.playback_context,
@@ -190,17 +383,25 @@ class ModernMpvPlayer(QOpenGLWidget):
         self.duration = 0.0
         self.paused = False
         self.buffering = True
-        self.volume = 80
+        self.volume = int(self.player_preferences["volume"])
         self.muted = False
+        self.show_playback_info = bool(self.player_preferences["show_playback_info"])
+        self.subtitle_mode = str(self.player_preferences["subtitle_mode"])
+        # Source metadata is intentionally small: it powers the mouse-triggered
+        # control-bar badge without putting a persistent overlay on the video.
+        self.video_info: dict[str, Any] = {}
+        self._next_video_info_refresh = 0.0
         self.speeds = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0]
         self.speed_index = 2
         self.enhancement_profiles = [
             {
+                "id": "original",
                 "label": "原画",
                 "options": None,
                 "shaders": [],
             },
             {
+                "id": "clean",
                 "label": "净化",
                 "shaders": [],
                 "options": {
@@ -220,6 +421,7 @@ class ModernMpvPlayer(QOpenGLWidget):
                 },
             },
             {
+                "id": "sharp",
                 "label": "锐化",
                 "shaders": [],
                 "options": {
@@ -239,6 +441,7 @@ class ModernMpvPlayer(QOpenGLWidget):
                 },
             },
             {
+                "id": "clarity",
                 "label": "高清",
                 "shaders": [],
                 "options": {
@@ -258,7 +461,8 @@ class ModernMpvPlayer(QOpenGLWidget):
                 },
             },
             {
-                "label": "动漫轻",
+                "id": "anime_light",
+                "label": "动漫AI轻",
                 "options": {
                     "scale": "ewa_lanczossharp",
                     "cscale": "spline36",
@@ -277,7 +481,8 @@ class ModernMpvPlayer(QOpenGLWidget):
                 ],
             },
             {
-                "label": "动漫强",
+                "id": "anime_strong",
+                "label": "动漫AI强",
                 "options": {
                     "scale": "ewa_lanczossharp",
                     "cscale": "spline36",
@@ -296,7 +501,8 @@ class ModernMpvPlayer(QOpenGLWidget):
                 ],
             },
             {
-                "label": "通用超",
+                "id": "ai_general",
+                "label": "AI通用",
                 "options": {
                     "scale": "ewa_lanczossharp",
                     "cscale": "spline36",
@@ -313,7 +519,8 @@ class ModernMpvPlayer(QOpenGLWidget):
                 ],
             },
             {
-                "label": "高质超",
+                "id": "ai_quality",
+                "label": "AI高质",
                 "options": {
                     "scale": "ewa_lanczossharp",
                     "cscale": "spline36",
@@ -330,14 +537,19 @@ class ModernMpvPlayer(QOpenGLWidget):
                 ],
             },
         ]
-        self.enhancement_index = 0
+        self.enhancement_index = _profile_index(
+            self.enhancement_profiles,
+            str(self.player_preferences["enhancement_profile"]),
+        )
         self._enhancement_original_options: dict[str, Any] = {}
         self.frame_profiles = [
             {
+                "id": "off",
                 "label": "关闭",
                 "options": None,
             },
             {
+                "id": "natural",
                 "label": "自然",
                 "options": {
                     "video-sync": "display-resample",
@@ -346,6 +558,7 @@ class ModernMpvPlayer(QOpenGLWidget):
                 },
             },
             {
+                "id": "smooth",
                 "label": "平滑",
                 "options": {
                     "video-sync": "display-resample",
@@ -354,7 +567,8 @@ class ModernMpvPlayer(QOpenGLWidget):
                 },
             },
             {
-                "label": "运动",
+                "id": "display",
+                "label": "显示插帧",
                 "options": {
                     "video-sync": "display-resample",
                     "interpolation": "yes",
@@ -362,16 +576,22 @@ class ModernMpvPlayer(QOpenGLWidget):
                 },
             },
             {
-                "label": "AI补帧",
-                "options": {
-                    "video-sync": "display-resample",
-                    "interpolation": "no",
-                    "tscale": "oversample",
-                },
-                "vapoursynth_rife": True,
+                "id": "motion_gpu",
+                # FFmpeg minterpolate runs its motion estimation on the CPU.
+                # It cannot sustain real library sources on this player and can
+                # starve the render/audio threads, so do not expose it as a
+                # usable feature until a verified GPU interpolation runtime is
+                # available.
+                "label": "运动补帧（需GPU）",
+                "options": None,
+                "available": False,
             },
         ]
-        self.frame_index = 0
+        self.frame_index = _profile_index(
+            self.frame_profiles,
+            str(self.player_preferences["frame_profile"]),
+        )
+        self._frame_effect_status = "关闭"
         self._frame_original_options: dict[str, Any] = {}
         self.audio_tracks: list[dict[str, Any]] = []
         self.subtitle_tracks: list[dict[str, Any]] = []
@@ -409,11 +629,14 @@ class ModernMpvPlayer(QOpenGLWidget):
         self.volume_hover = False
         self.center_feedback = 0.0
         self.center_feedback_icon = "pause"
-        self.always_on_top = False
+        self.always_on_top = bool(self.player_preferences["always_on_top"])
         self._startup_topmost = False
 
         self.setWindowTitle("JMH-MoviePop")
-        self.setWindowFlags(Qt.Window | Qt.FramelessWindowHint | Qt.WindowMinMaxButtonsHint)
+        window_flags = Qt.Window | Qt.FramelessWindowHint | Qt.WindowMinMaxButtonsHint
+        if self.always_on_top:
+            window_flags |= Qt.WindowStaysOnTopHint
+        self.setWindowFlags(window_flags)
         self.resize(1280, 720)
         self.setMinimumSize(900, 520)
         self.setMouseTracking(True)
@@ -441,13 +664,13 @@ class ModernMpvPlayer(QOpenGLWidget):
     def _create_player(self) -> None:
         mpv_options = {
             "vo": "libmpv",
-            "hwdec": os.environ.get("MOVIEPOP_MPV_HWDEC", "auto-copy"),
+            "hwdec": os.environ.get("MOVIEPOP_MPV_HWDEC") or self.player_preferences["hwdec"],
             "gpu_api": "opengl",
             "vd_lavc_dr": "no",
             "osc": False,
             "input_default_bindings": False,
-            "sub_auto": "all",
-            "sub_visibility": "yes",
+            "sub_auto": "all" if self.subtitle_mode == "auto" else "no",
+            "sub_visibility": "yes" if self.subtitle_mode == "auto" else "no",
             "slang": "zh,chi,zho,chs,cht,sc,tc,ja,jpn,en,eng",
             "alang": "ja,jpn,zh,chi,zho,chs,cht,sc,tc,en,eng",
             "force_window": "no",
@@ -566,6 +789,7 @@ class ModernMpvPlayer(QOpenGLWidget):
         self.loading_percent = 0
         self.position = 0.0
         self.duration = 0.0
+        self._reset_video_info()
         self.buffering = True
         self.audio_tracks = []
         self.subtitle_tracks = []
@@ -815,7 +1039,41 @@ class ModernMpvPlayer(QOpenGLWidget):
         painter.setPen(QColor(255, 255, 255, 126))
         state = "Buffering" if self.buffering else ("Paused" if self.paused else "Playing")
         painter.drawText(QRectF(18, 34, 180, 20), Qt.AlignLeft | Qt.AlignVCenter, state)
+        self._draw_video_info_badge(painter)
         self._draw_window_chrome(painter)
+        painter.restore()
+
+    def _draw_video_info_badge(self, painter: QPainter) -> None:
+        """Draw source quality/FPS as a small part of the transient controls."""
+        if not self.show_playback_info or not self.file_loaded:
+            return
+        info = self.video_info
+        quality = str(info.get("quality") or "")
+        details = [str(info.get("hdr") or ""), _video_fps_badge_label(info)]
+        details = [item for item in details if item]
+        if not quality and not details:
+            return
+
+        painter.save()
+        x = 18.0
+        y = 55.0
+        if quality:
+            painter.setFont(QFont("Segoe UI", 8, QFont.DemiBold))
+            quality_width = max(34.0, float(painter.fontMetrics().horizontalAdvance(quality) + 16))
+            quality_rect = QRectF(x, y, quality_width, 21)
+            painter.setPen(QPen(QColor(133, 169, 218, 112), 1.0))
+            painter.setBrush(QColor(15, 29, 48, 208))
+            painter.drawRoundedRect(quality_rect, 4.5, 4.5)
+            painter.setPen(QColor(245, 249, 255, 238))
+            painter.drawText(quality_rect, Qt.AlignCenter, quality)
+            x = quality_rect.right() + 9.0
+
+        if details:
+            painter.setFont(QFont("Segoe UI", 8, QFont.DemiBold))
+            painter.setPen(QColor(222, 232, 246, 184))
+            text = "  ·  ".join(details)
+            text_width = max(90.0, min(320.0, self.width() - x - 200.0))
+            painter.drawText(QRectF(x, y, text_width, 21), Qt.AlignLeft | Qt.AlignVCenter, text)
         painter.restore()
 
     def _draw_window_chrome(self, painter: QPainter) -> None:
@@ -1249,7 +1507,7 @@ class ModernMpvPlayer(QOpenGLWidget):
                     "label": str(profile.get("label") or f"补帧{index + 1}"),
                     "id": index,
                     "selected": index == self.frame_index,
-                    "enabled": True,
+                    "enabled": bool(profile.get("available", True)),
                 }
                 for index, profile in enumerate(self.frame_profiles)
             ]
@@ -1512,6 +1770,54 @@ class ModernMpvPlayer(QOpenGLWidget):
         finally:
             self._progress_report_inflight = False
 
+    def _read_mpv_property(self, name: str) -> Any:
+        """Read optional MPV telemetry without letting one missing property break playback."""
+        if self.player is None:
+            return None
+        try:
+            return getattr(self.player, name.replace("-", "_"))
+        except Exception:
+            return None
+
+    def _reset_video_info(self) -> None:
+        self.video_info = {}
+        self._next_video_info_refresh = 0.0
+
+    def _refresh_video_info(self) -> None:
+        if not self.file_loaded:
+            self.video_info = {}
+            return
+
+        source_params = self._read_mpv_property("video-params")
+        source_map = source_params if isinstance(source_params, dict) else {}
+        source_size = _video_size_from_params(source_map)
+        display_hz = _first_positive_number(
+            self._read_mpv_property("estimated-display-fps"),
+            self._read_mpv_property("display-fps"),
+        )
+        if display_hz is None:
+            try:
+                screen = self.screen()
+                display_hz = _positive_number(screen.refreshRate() if screen is not None else None)
+            except Exception:
+                display_hz = None
+
+        display_interpolation_enabled = (
+            _mpv_option_is_enabled(self._read_mpv_property("interpolation"))
+            and _as_text(self._read_mpv_property("video-sync")).strip().lower() == "display-resample"
+        )
+        self.video_info = {
+            "quality": _source_quality_label(source_size),
+            "fps": _first_positive_number(
+                source_map.get("fps"),
+                self._read_mpv_property("container-fps"),
+            ),
+            "hdr": _source_hdr_label(source_map),
+            "display_hz": display_hz,
+            "display_interpolation_enabled": display_interpolation_enabled,
+            "display_sync_active": _mpv_option_is_enabled(self._read_mpv_property("display-sync-active")),
+        }
+
     def _poll_state(self) -> None:
         player = self.player
         if player is None:
@@ -1542,6 +1848,9 @@ class ModernMpvPlayer(QOpenGLWidget):
             now = time.monotonic()
             elapsed = max(0.0, min(1.0, now - self._last_watch_tick))
             self._last_watch_tick = now
+            if now >= self._next_video_info_refresh:
+                self._next_video_info_refresh = now + 0.5
+                self._refresh_video_info()
             if self.file_loaded and not self.paused and not self.buffering and self.position > 0:
                 self._pending_watch_seconds += elapsed * max(0.25, min(3.0, speed))
             if now >= self._next_track_refresh:
@@ -1627,6 +1936,7 @@ class ModernMpvPlayer(QOpenGLWidget):
         self.playback_finished = False
         self.loading_percent = 100
         self.buffering = False
+        self._next_video_info_refresh = 0.0
         if self.player is not None and self.start_position > 0 and not self._initial_seek_done:
             try:
                 self.player.seek(self.start_position, "absolute", "exact")
@@ -1649,7 +1959,10 @@ class ModernMpvPlayer(QOpenGLWidget):
             return
         self._refresh_track_list()
         try:
-            if self.subtitle_tracks and self.selected_subtitle_id is None:
+            if self.subtitle_mode == "off":
+                self.player.sid = "no"
+                self.selected_subtitle_id = None
+            elif self.subtitle_tracks and self.selected_subtitle_id is None:
                 preferred = self.subtitle_tracks[0]["id"]
                 self.player.sid = int(preferred)
                 self.selected_subtitle_id = int(preferred)
@@ -1962,7 +2275,7 @@ class ModernMpvPlayer(QOpenGLWidget):
                 self.frame_index = 0
             self.frame_index = int(_clamp(self.frame_index, 0, len(self.frame_profiles) - 1))
             self._apply_frame_interpolation_profile()
-            logger.info("Frame interpolation profile: %s", self._frame_interpolation_label())
+            logger.info("Frame interpolation profile: %s (%s)", self._frame_interpolation_label(), self._frame_effect_status)
             self._close_menu()
             self._show_controls(3.4)
             return
@@ -2077,6 +2390,8 @@ class ModernMpvPlayer(QOpenGLWidget):
             logger.debug("Append GLSL shader failed: %s", shader_path, exc_info=True)
 
     def _frame_interpolation_label(self) -> str:
+        if self._frame_effect_status in {"不可用", "需GPU"}:
+            return self._frame_effect_status
         try:
             return str(self.frame_profiles[self.frame_index]["label"])
         except Exception:
@@ -2085,9 +2400,15 @@ class ModernMpvPlayer(QOpenGLWidget):
     def _cycle_frame_interpolation(self) -> None:
         if self.player is None:
             return
-        self.frame_index = (self.frame_index + 1) % len(self.frame_profiles)
+        for offset in range(1, len(self.frame_profiles) + 1):
+            index = (self.frame_index + offset) % len(self.frame_profiles)
+            if self.frame_profiles[index].get("available", True):
+                self.frame_index = index
+                break
+        else:
+            return
         self._apply_frame_interpolation_profile()
-        logger.info("Frame interpolation profile: %s", self._frame_interpolation_label())
+        logger.info("Frame interpolation profile: %s (%s)", self._frame_interpolation_label(), self._frame_effect_status)
         self._show_controls(3.4)
 
     def _apply_frame_interpolation_profile(self) -> None:
@@ -2096,14 +2417,18 @@ class ModernMpvPlayer(QOpenGLWidget):
         profile = self.frame_profiles[self.frame_index]
         options = profile.get("options")
         self._remember_original_frame_options()
-        self._remove_vapoursynth_rife_filter()
+        self._remove_legacy_motion_interpolation_filter()
         self._restore_original_frame_options()
+        if not profile.get("available", True):
+            self._frame_effect_status = "需GPU"
+            logger.warning("Motion interpolation is unavailable until a verified GPU runtime is installed")
+            return
         if not options:
+            self._frame_effect_status = "关闭"
             return
         for name, value in options.items():
             self._set_mpv_option(name, value)
-        if profile.get("vapoursynth_rife"):
-            self._append_vapoursynth_rife_filter()
+        self._frame_effect_status = str(profile.get("label") or "关闭")
 
     def _remember_original_frame_options(self) -> None:
         if self.player is None or self._frame_original_options:
@@ -2123,49 +2448,25 @@ class ModernMpvPlayer(QOpenGLWidget):
             if value is not None:
                 self._set_mpv_option(name, value)
 
-    @staticmethod
-    def _escape_mpv_filter_value(value: str) -> str:
-        return (
-            value.replace("\\", "/")
-            .replace(":", "\\:")
-            .replace(",", "\\,")
-            .replace(";", "\\;")
+    def _has_video_filter(self, label: str) -> bool:
+        filters = self._read_mpv_property("vf")
+        if not isinstance(filters, list):
+            return False
+        return any(
+            isinstance(item, dict)
+            and str(item.get("label") or "") == label
+            and bool(item.get("enabled", True))
+            for item in filters
         )
 
-    def _remove_vapoursynth_rife_filter(self) -> None:
-        if self.player is None:
+    def _remove_legacy_motion_interpolation_filter(self) -> None:
+        """Remove the unsafe filter used by previous player builds, if present."""
+        if self.player is None or not self._has_video_filter("moviepop-motion"):
             return
         try:
-            self.player.command("vf", "remove", "@moviepop-rife")
+            self.player.command("vf", "remove", "@moviepop-motion")
         except Exception:
-            logger.debug("Remove RIFE VapourSynth filter skipped", exc_info=True)
-
-    def _append_vapoursynth_rife_filter(self) -> bool:
-        if self.player is None:
-            return False
-        script_path = (PLAYER_DIR / "vapoursynth" / "rife_realtime.vpy").resolve()
-        if not script_path.exists():
-            logger.warning("RIFE VapourSynth script missing: %s", script_path)
-            return False
-        plugin_dir = PLAYER_DIR / "vapoursynth" / "plugins"
-        plugin_path = plugin_dir / "librife_windows_x86-64.dll"
-        model_root = plugin_dir / "models"
-        if os.name == "nt" and not plugin_path.exists():
-            logger.warning("RIFE VapourSynth plugin missing: %s", plugin_path)
-            return False
-        if not any((model_root / name).exists() for name in ("rife-v4_ensembleFalse_fastTrue", "rife-v2.3")):
-            logger.warning("RIFE model files missing under: %s", model_root)
-            return False
-        filter_spec = f"@moviepop-rife:vapoursynth=file={self._escape_mpv_filter_value(str(script_path))}"
-        try:
-            self.player.command("vf", "add", filter_spec)
-            return True
-        except Exception:
-            logger.warning(
-                "RIFE VapourSynth filter failed. Install VapourSynth and VapourSynth-RIFE-ncnn-Vulkan to use AI补帧.",
-                exc_info=True,
-            )
-            return False
+            logger.debug("Remove motion interpolation filter failed", exc_info=True)
 
     def _set_mpv_option(self, name: str, value: Any) -> None:
         if self.player is None:

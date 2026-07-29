@@ -28,3 +28,4 @@ except Exception:
     doubled = core.rife.RIFE(rgb, model=5, factor_num=2, factor_den=1, sc=True)
 
 video_out = core.resize.Bicubic(doubled, format=vs.YUV420P8, matrix_s=matrix)
+video_out.set_output()

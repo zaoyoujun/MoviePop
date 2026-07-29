@@ -82,6 +82,12 @@ const homeData = ref({
   items: []
 })
 
+// The native player can return focus without changing the Vue route. Refresh
+// only after a short TTL and coalesce focus/visibility events into one request.
+const HOME_REVALIDATE_MS = 8 * 1000
+let lastHomeLoadedAt = 0
+let pendingHomeRefresh = false
+
 const categoryLabels = {
   all: '全部',
   movie: '电影',
@@ -116,13 +122,16 @@ const rawVisibleItems = computed(() => {
   const category = currentCategory.value
   const key = keyword.value.trim().toLowerCase()
   return homeData.value.items.filter(item => {
+    const itemCategories = Array.isArray(item.categories) && item.categories.length
+      ? item.categories
+      : [item.category]
     const matchCategory =
       category === 'all' ||
       (category === '4k' && String(item.quality || item.tags || '').toLowerCase().includes('4k')) ||
       (category === 'unwatched' && !Number(item.progress?.percent || item.progress || 0)) ||
       (category === 'watched' && Number(item.progress?.percent || item.progress || 0) >= 90) ||
       (category === 'online' && item.source_type === 'online') ||
-      item.category === category
+      itemCategories.includes(category)
     const text = `${item.title || ''} ${item.sourceName || ''} ${item.year || ''}`.toLowerCase()
     return matchCategory && (!key || text.includes(key))
   })
@@ -156,8 +165,13 @@ async function fetchHomeData() {
     }
     continueHistory.value = MOCK_DATA.items.slice(0, 6)
     loading.value = false
+    lastHomeLoadedAt = Date.now()
     await nextTick()
     scheduleScrollRestore(currentScrollKey())
+    if (pendingHomeRefresh) {
+      pendingHomeRefresh = false
+      void refreshHomeData({ force: true })
+    }
     return
   }
 
@@ -185,9 +199,26 @@ async function fetchHomeData() {
     continueHistory.value = []
   } finally {
     loading.value = false
+    lastHomeLoadedAt = Date.now()
     await nextTick()
     scheduleScrollRestore(currentScrollKey())
+    if (pendingHomeRefresh) {
+      pendingHomeRefresh = false
+      void refreshHomeData({ force: true })
+    }
   }
+}
+
+async function refreshHomeData({ force = false } = {}) {
+  const stale = Date.now() - lastHomeLoadedAt >= HOME_REVALIDATE_MS
+  if (loading.value) {
+    // Only semantic changes (scan/category) need a second request. Focus and
+    // visibility events during the initial request merely duplicate it.
+    pendingHomeRefresh = pendingHomeRefresh || force
+    return
+  }
+  if (!force && !stale) return
+  await fetchHomeData()
 }
 
 function goDetail(id) {
@@ -248,9 +279,11 @@ function normalizeHeroItem(item) {
     id: item.id,
     title: stripSeasonSuffix(item.title) || '未命名影视',
     year: item.year || '',
-    rating: item.rating || item.score || '9.2',
+    rating: Number(item.rating || item.score) > 0 ? Number(item.rating || item.score) : '',
     description: item.description || item.overview || '',
     backdrop: item.backdropUrl || item.coverUrl || item.posterUrl || '',
+    recommendationReason: item.recommendationReason || '正在推荐',
+    isResume: Boolean(item.isResume),
     tags: Array.isArray(item.tags) && item.tags.length
       ? item.tags
       : [categoryLabel, item.year, sourceName, item.durationText].filter(Boolean)
@@ -265,6 +298,8 @@ function normalizeMovieCard(item, index = 0) {
     type: categoryLabels[item.category] || item.category || '影视',
     year: item.year || '',
     source: item.sourceName || sourceTypeLabels[item.sourceType] || item.sourceType || '未知',
+    continueContext: item.continueContext || '',
+    cardKey: item.continueCardKey || `${item.id || item.filePath || item.title || 'media'}:${item.lastPlayTime || index}`,
     cover: item.coverUrl || item.cover || item.posterUrl || '',
     progress: Number(item.progress?.percent || item.progress || 0),
     badge: index < 4 ? 'NEW' : ''
@@ -272,14 +307,26 @@ function normalizeMovieCard(item, index = 0) {
 }
 
 onMounted(() => {
-  fetchHomeData()
+  refreshHomeData({ force: true })
   scheduleScrollRestore(currentScrollKey())
 
   window.addEventListener('scan:completed', handleScanCompleted)
+  window.addEventListener('focus', handleWindowFocus)
+  document.addEventListener('visibilitychange', handleVisibilityChange)
 })
 
 function handleScanCompleted() {
-  fetchHomeData()
+  refreshHomeData({ force: true })
+}
+
+function handleWindowFocus() {
+  refreshHomeData()
+}
+
+function handleVisibilityChange() {
+  if (document.visibilityState === 'visible') {
+    refreshHomeData()
+  }
 }
 
 onActivated(async () => {
@@ -288,17 +335,21 @@ onActivated(async () => {
 
   // 如果扫描在其它页面已完成，激活时刷新数据
   if (consumeScanCompleted()) {
-    await fetchHomeData()
-    await nextTick()
-    scheduleScrollRestore(currentScrollKey())
+    await refreshHomeData({ force: true })
+  } else {
+    await refreshHomeData()
   }
+  await nextTick()
+  scheduleScrollRestore(currentScrollKey())
 })
 
-watch(currentCategory, fetchHomeData)
+watch(currentCategory, () => refreshHomeData({ force: true }))
 
 onBeforeRouteLeave(() => {
   saveScrollPosition(currentScrollKey())
   window.removeEventListener('scan:completed', handleScanCompleted)
+  window.removeEventListener('focus', handleWindowFocus)
+  document.removeEventListener('visibilitychange', handleVisibilityChange)
 })
 </script>
 

@@ -51,6 +51,49 @@ LOCKED_METADATA_FIELDS = (
     "vote_count",
 )
 
+# These values come from a metadata provider (or a manual metadata submission),
+# rather than from the file scan.  Keep this list deliberately separate from
+# episodes/files/file_path: a rescan must always replace those scan-derived
+# values so that newly added episodes are visible immediately.
+SCRAPED_METADATA_FIELDS = (
+    "metadata_locked",
+    "metadata_title",
+    "display_title",
+    "intro",
+    "year",
+    "rating",
+    "cover_url",
+    "backdrop_url",
+    "tags",
+    "genres",
+    "countries",
+    "languages",
+    "duration",
+    "metadata_source",
+    "original_title",
+    "tmdb_id",
+    "tmdb_media_type",
+    "douban_url",
+    "vote_count",
+)
+
+# Rescanning should not discard user state just because the logical item was
+# rebuilt from the file list.
+PERSISTED_USER_STATE_FIELDS = (
+    "is_favorite",
+    "playback",
+)
+
+_METADATA_EVIDENCE_FIELDS = (
+    "metadata_title",
+    "cover_url",
+    "backdrop_url",
+    "intro",
+    "tmdb_id",
+    "douban_url",
+    "original_title",
+)
+
 
 def _now_iso() -> str:
     return datetime.now().isoformat(timespec="seconds")
@@ -123,6 +166,9 @@ def get_status(source_id: str) -> dict[str, Any]:
             "processed": 0,
             "total": 0,
             "error": "",
+            "metadataReused": 0,
+            "metadataScraped": 0,
+            "episodesUpdated": 0,
         }))
 
 
@@ -148,6 +194,9 @@ def start_background_scan(source_id: str) -> dict[str, Any]:
             "processed": 0,
             "total": 0,
             "error": "",
+            "metadataReused": 0,
+            "metadataScraped": 0,
+            "episodesUpdated": 0,
             "startedAt": _now_iso(),
             "finishedAt": "",
         }
@@ -220,15 +269,21 @@ def _scan_source(source_id: str) -> None:
         for movie in previous_library
         if movie.get("source_id") == source_id and str(movie.get("id") or "")
     }
+    previous_by_metadata_key: dict[tuple[str, ...], list[dict[str, Any]]] = {}
+    for movie in previous_library:
+        if movie.get("source_id") != source_id:
+            continue
+        metadata_key = _metadata_cache_key(movie)
+        if metadata_key:
+            previous_by_metadata_key.setdefault(metadata_key, []).append(movie)
+
     movies = merge_series_videos(files, source.get("name", ""))
     enriched = []
     auto_scrape = _auto_scrape_enabled()
     scraper = None
-    if auto_scrape:
-        _set_status(source_id, stage="scrape", processed=0, total=len(movies))
-        scraper = _create_scraper()
-        if scraper is None:
-            auto_scrape = False
+    metadata_reused = 0
+    metadata_scraped = 0
+    episodes_updated = 0
     for index, movie in enumerate(movies, start=1):
         if _is_cancelled(source_id):
             break
@@ -246,15 +301,68 @@ def _scan_source(source_id: str) -> None:
         if item.get("file_path") and not item.get("path"):
             item["path"] = item["file_path"]
         previous_item = previous_by_id.get(str(item.get("id") or ""))
-        if previous_item and previous_item.get("metadata_locked"):
-            _copy_locked_metadata(item, previous_item)
-        if index == 1 or not auto_scrape:
+
+        # A normal episode update keeps the logical item ID.  Fall back to a
+        # conservative metadata key for a one-file movie that later becomes
+        # an S1 series (and consequently gains an S1 suffix in its ID).
+        if previous_item is None:
+            candidates = previous_by_metadata_key.get(_metadata_cache_key(item), [])
+            if len(candidates) == 1:
+                previous_item = candidates[0]
+
+        # ``updated_at`` changes on every scan, while ``added_at`` records
+        # when this logical resource first entered the library.  Keep the old
+        # scan timestamp as a migration fallback for libraries created before
+        # this field existed.
+        if previous_item:
+            item["added_at"] = (
+                previous_item.get("added_at")
+                or previous_item.get("updated_at")
+                or item["updated_at"]
+            )
+        else:
+            item["added_at"] = item["updated_at"]
+
+        metadata_reused_for_item = False
+        if previous_item:
+            _copy_persisted_user_state(item, previous_item)
+            if _episode_signature(item) != _episode_signature(previous_item):
+                episodes_updated += 1
+            if previous_item.get("metadata_locked"):
+                _copy_locked_metadata(item, previous_item)
+                metadata_reused_for_item = True
+            elif _has_reusable_metadata(previous_item):
+                _copy_scraped_metadata(item, previous_item)
+                metadata_reused_for_item = True
+
+        if metadata_reused_for_item:
+            metadata_reused += 1
+
+        if index == 1:
             logger.info("-" * 48)
         _log_detected_movie(item)
-        if auto_scrape and not item.get("metadata_locked"):
-            _scrape_metadata(source_id, [item], scraper=scraper)
+        # New/failed entries are scraped lazily.  If every item can reuse
+        # cached metadata, no scraper session is created at all.
+        if auto_scrape and not metadata_reused_for_item:
+            if scraper is None:
+                scraper = _create_scraper()
+                if scraper is None:
+                    auto_scrape = False
+            if auto_scrape and scraper is not None:
+                _set_status(source_id, stage="scrape")
+                _scrape_metadata(source_id, [item], scraper=scraper)
+                metadata_scraped += 1
         elif item.get("metadata_locked"):
             logger.info("已锁定自定义资料，跳过自动刮削：%s", item.get("display_title") or item.get("title", ""))
+        _set_status(
+            source_id,
+            current=item.get("title", ""),
+            processed=index,
+            total=len(movies),
+            metadataReused=metadata_reused,
+            metadataScraped=metadata_scraped,
+            episodesUpdated=episodes_updated,
+        )
         enriched.append(item)
 
     existing = [m for m in previous_library if m.get("source_id") != source_id]
@@ -271,6 +379,9 @@ def _scan_source(source_id: str) -> None:
             current="",
             processed=len(enriched),
             total=len(movies),
+            metadataReused=metadata_reused,
+            metadataScraped=metadata_scraped,
+            episodesUpdated=episodes_updated,
             error="扫描已取消",
             finishedAt=_now_iso(),
         )
@@ -282,6 +393,9 @@ def _scan_source(source_id: str) -> None:
             current="",
             processed=len(enriched),
             total=len(enriched),
+            metadataReused=metadata_reused,
+            metadataScraped=metadata_scraped,
+            episodesUpdated=episodes_updated,
             error="",
             finishedAt=_now_iso(),
         )
@@ -291,6 +405,85 @@ def _copy_locked_metadata(target: dict[str, Any], source: dict[str, Any]) -> Non
     for key in LOCKED_METADATA_FIELDS:
         if key in source:
             target[key] = source[key]
+
+
+def _metadata_cache_key(movie: dict[str, Any]) -> tuple[str, ...]:
+    """Build a stable key for metadata reuse within a single data source."""
+    title = (
+        movie.get("series_title")
+        or movie.get("title")
+        or movie.get("name")
+        or movie.get("search_title")
+        or ""
+    )
+    normalized_title = _normalize_metadata_key(title)
+    if not normalized_title:
+        return ()
+    return (
+        normalized_title,
+        _normalize_metadata_key(movie.get("year_hint") or ""),
+        _normalize_metadata_key(movie.get("season") or 1),
+        _normalize_metadata_key(movie.get("season_title") or ""),
+        _normalize_metadata_key(movie.get("special_type") or ""),
+        _normalize_metadata_key(movie.get("part") or ""),
+        _normalize_metadata_key(movie.get("version_title") or ""),
+    )
+
+
+def _normalize_metadata_key(value: Any) -> str:
+    return re.sub(r"[\W_]+", "", str(value or "").casefold(), flags=re.UNICODE)
+
+
+def _episode_signature(movie: dict[str, Any]) -> tuple[str, ...]:
+    """Represent the current episode list without depending on file paths."""
+    episodes = movie.get("episodes")
+    if not isinstance(episodes, list):
+        episodes = []
+    identifiers: list[str] = []
+    for episode in episodes:
+        if isinstance(episode, dict):
+            value = episode.get("id") or episode.get("number") or episode.get("episode") or ""
+        else:
+            value = episode
+        normalized = str(value or "").strip()
+        if normalized:
+            identifiers.append(normalized)
+    if identifiers:
+        return tuple(sorted(identifiers))
+    count = movie.get("episode_count") or 0
+    return (f"count:{count}",) if count else ()
+
+
+def _has_reusable_metadata(movie: dict[str, Any]) -> bool:
+    """Do not treat provider labels alone as a successful scrape result."""
+    for key in _METADATA_EVIDENCE_FIELDS:
+        value = movie.get(key)
+        if isinstance(value, str):
+            if value.strip():
+                return True
+        elif value:
+            return True
+    return False
+
+
+def _copy_scraped_metadata(target: dict[str, Any], source: dict[str, Any]) -> None:
+    for key in SCRAPED_METADATA_FIELDS:
+        if key in source:
+            target[key] = _copy_cached_value(source[key])
+
+
+def _copy_persisted_user_state(target: dict[str, Any], source: dict[str, Any]) -> None:
+    for key in PERSISTED_USER_STATE_FIELDS:
+        if key in source:
+            target[key] = _copy_cached_value(source[key])
+
+
+def _copy_cached_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        return dict(value)
+    if isinstance(value, list):
+        return list(value)
+    return value
 
 
 def _collect_video_files(source: dict[str, Any]) -> list[str]:
@@ -651,33 +844,16 @@ def _scrape_metadata(source_id: str, movies: list[dict[str, Any]], scraper: Any 
                 if meta.get(key):
                     movie[key] = meta[key]
             
+            # The scanner's directory category is the primary library
+            # classification.  Provider genres can be absent (notably for
+            # AniBK + TMDB artwork merges), so never let incomplete metadata
+            # move an /动漫 item into /电视剧.  The provider media type is still
+            # useful for deciding whether the item is episodic.
             media_type = str(meta.get("tmdb_media_type") or "").strip().lower()
-            genres = meta.get("genres") or []
-            if media_type:
-                if media_type == "tv":
-                    has_animation = any(
-                        str(g).lower() in {"animation", "动画", "アニメ"}
-                        for g in genres
-                    )
-                    has_anime_keyword = any(
-                        str(g).lower() in {"anime", "动漫"}
-                        for g in genres
-                    )
-                    if has_animation or has_anime_keyword:
-                        movie["category"] = "动漫"
-                    else:
-                        movie["category"] = "电视剧"
-                    movie["is_series"] = True
-                elif media_type == "movie":
-                    has_animation = any(
-                        str(g).lower() in {"animation", "动画", "アニメ"}
-                        for g in genres
-                    )
-                    if has_animation:
-                        movie["category"] = "动漫"
-                    else:
-                        movie["category"] = "电影"
-                    movie["is_series"] = False
+            if media_type == "tv":
+                movie["is_series"] = True
+            elif media_type == "movie":
+                movie["is_series"] = False
         except Exception as exc:
             logger.warning("刮削失败：%s error=%s", movie.get("title", ""), exc)
         finally:

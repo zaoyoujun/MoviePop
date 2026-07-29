@@ -81,6 +81,36 @@ def test_scraped_animation_movie_keeps_directory_category_and_gets_anime_categor
     assert movie["type"] == "movie"
 
 
+def test_dr_stone_directory_layout_keeps_series_seasons_parts_versions_and_specials():
+    root = "/media/\u52a8\u6f2b/\u77f3\u7eaa\u5143"
+    paths = [
+        f"{root}/S01/1080P WEB\u7248/\u77f3\u7eaa\u5143 S01E01 [VCB-Studio][1080P][x265][AAC].mkv",
+        f"{root}/S01/4K DV\u7248/\u77f3\u7eaa\u5143 S01E01 [2160P DV][HDR][x265].mkv",
+        f"{root}/S01/\u56fd\u914d\u53cc\u8bed\u7248/\u77f3\u7eaa\u5143 S01E01 [\u56fd\u8bed+\u65e5\u8bed][\u4e2d\u5b57][1080P].mkv",
+        f"{root}/Season 02 Stone Wars/BD\u539f\u76d8REMUX\u7248/Dr.Stone.S02E01.1080p.BluRay.REMUX.AVC.DTS-HD.MA.mkv",
+        f"{root}/Season 02 Stone Wars/\u7b80\u4e2d\u5185\u5d4c\u7248/\u77f3\u7eaa\u5143 \u7b2c\u4e8c\u5b63 E01 [\u7b80\u4f53\u5185\u5d4c][1080P].mp4",
+        f"{root}/\u7b2c\u4e09\u5b63 NEW WORLD/NEW WORLD #1/1080P\u6807\u51c6\u7248/\u77f3\u7eaa\u5143 S03E01 [1080P][x264].mkv",
+        f"{root}/\u7b2c\u4e09\u5b63 NEW WORLD/NEW WORLD #1/\u9ed1\u767d\u539f\u8272\u7248/\u77f3\u7eaa\u5143 S03E01 [\u9ed1\u767d\u7248][1080P].mkv",
+        f"{root}/\u7b2c\u4e09\u5b63 NEW WORLD/NEW WORLD #2/1080P WEB\u7248/\u77f3\u7eaa\u5143 S03E12 [1080P][WEB-DL].mkv",
+        f"{root}/Season 04 \u79d1\u5b66\u4e0e\u672a\u6765/\u79d1\u5b66\u4e0e\u672a\u6765 #1/1080P\u7248/\u77f3\u7eaa\u5143 S04E01 [1080P].mkv",
+        f"{root}/Season 04 \u79d1\u5b66\u4e0e\u672a\u6765/\u79d1\u5b66\u4e0e\u672a\u6765 #2/1080P\u7248/\u77f3\u7eaa\u5143 S04E09 [1080P].mkv",
+        f"{root}/Season 04 \u79d1\u5b66\u4e0e\u672a\u6765/\u79d1\u5b66\u4e0e\u672a\u6765 #3/4K\u7248/\u77f3\u7eaa\u5143 S04E17 [2160P].mkv",
+        f"{root}/\u7279\u522b\u6536\u5f55/OAD/\u77f3\u7eaa\u5143 OAD 01 [1080P].mkv",
+        f"{root}/\u7279\u522b\u6536\u5f55/\u7279\u522b\u7bc7 \u9f99\u6c34\u7bc7/\u77f3\u7eaa\u5143 \u9f99\u6c34\u7bc7 \u7279\u522b\u7bc7 [1080P].mkv",
+        f"{root}/\u7279\u522b\u6536\u5f55/\u5267\u573a\u7248 \u79d1\u5b66\u7684\u4e16\u754c/\u77f3\u7eaa\u5143 \u5267\u573a\u7248 \u79d1\u5b66\u7684\u4e16\u754c [1080P].mkv",
+    ]
+
+    parsed = [parse_video_filename(path) for path in paths]
+
+    assert {item["title"] for item in parsed} == {"\u77f3\u7eaa\u5143"}
+    assert [(item["season"], item["season_title"]) for item in parsed[3:5]] == [(2, "Stone Wars"), (2, "Stone Wars")]
+    assert [(item["season"], item["season_title"], item["part"]) for item in parsed[8:11]] == [
+        (4, "\u79d1\u5b66\u4e0e\u672a\u6765", 1), (4, "\u79d1\u5b66\u4e0e\u672a\u6765", 2), (4, "\u79d1\u5b66\u4e0e\u672a\u6765", 3),
+    ]
+    assert [item["special_type"] for item in parsed[-3:]] == ["OVA", "\u7279\u522b\u7bc7", "\u5267\u573a\u7248"]
+    assert len(merge_series_videos(paths)) == 14
+
+
 def run_case(name, file_path, expected):
     print(f"\n{'='*60}")
     print(f"测试: {name}")

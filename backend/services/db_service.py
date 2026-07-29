@@ -70,7 +70,8 @@ def init_db():
             version_title TEXT,
             display_title TEXT,
             is_favorite INTEGER DEFAULT 0,
-            metadata_locked INTEGER DEFAULT 0
+            metadata_locked INTEGER DEFAULT 0,
+            added_at TEXT
         )
     ''')
 
@@ -100,6 +101,7 @@ def init_db():
         'display_title': 'TEXT',
         'is_favorite': 'INTEGER DEFAULT 0',
         'metadata_locked': 'INTEGER DEFAULT 0',
+        'added_at': 'TEXT',
     }.items():
         if column_name not in existing_movie_columns:
             cursor.execute(f'ALTER TABLE movies ADD COLUMN {column_name} {column_type}')
@@ -186,8 +188,8 @@ def save_library(movies):
                 duration, genres, countries, languages, metadata_source,
                 original_title, tmdb_id, tmdb_media_type, douban_url, vote_count,
                 release_group, video_codec, audio_info, franchise, search_title, series_title, part,
-                metadata_title, version_title, display_title, is_favorite, metadata_locked
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                metadata_title, version_title, display_title, is_favorite, metadata_locked, added_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             movie.get('id', ''),
             movie.get('name', ''),
@@ -238,7 +240,8 @@ def save_library(movies):
             movie.get('version_title', ''),
             movie.get('display_title', ''),
             1 if movie.get('is_favorite') or movie.get('isFavorite') else 0,
-            1 if movie.get('metadata_locked') or movie.get('metadataLocked') else 0
+            1 if movie.get('metadata_locked') or movie.get('metadataLocked') else 0,
+            movie.get('added_at') or movie.get('updated_at') or datetime.now().isoformat()
         ))
     
     conn.commit()
@@ -308,7 +311,8 @@ def load_library():
             'version_title': row[46] if len(row) > 46 else '',
             'display_title': row[47] if len(row) > 47 else '',
             'is_favorite': bool(row[48]) if len(row) > 48 else False,
-            'metadata_locked': bool(row[49]) if len(row) > 49 else False
+            'metadata_locked': bool(row[49]) if len(row) > 49 else False,
+            'added_at': row[50] if len(row) > 50 else ''
         }
         movies.append(movie)
     
@@ -374,7 +378,8 @@ def get_movie_by_id(movie_id):
             'version_title': row[46] if len(row) > 46 else '',
             'display_title': row[47] if len(row) > 47 else '',
             'is_favorite': bool(row[48]) if len(row) > 48 else False,
-            'metadata_locked': bool(row[49]) if len(row) > 49 else False
+            'metadata_locked': bool(row[49]) if len(row) > 49 else False,
+            'added_at': row[50] if len(row) > 50 else ''
         }
     else:
         movie = None

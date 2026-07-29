@@ -25,6 +25,7 @@ try:
     from backend.services import source_service
     from backend.services import system_service
     from backend.services import analytics_service
+    from backend.services import db_service
 except ImportError:
     from api.schemas import api_response
     from services import library_service as lib
@@ -33,6 +34,7 @@ except ImportError:
     from services import source_service
     from services import system_service
     from services import analytics_service
+    from services import db_service
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -123,6 +125,32 @@ async def update_config(request: Request):
         return api_response(data=config.get_public_config())
     except Exception as exc:
         logger.exception("Update config failed")
+        return api_response(code=500, message=str(exc))
+
+
+@router.get("/api/settings/player")
+async def get_player_settings():
+    """Return the narrow, non-sensitive preference set for new player windows."""
+    AppConfig = _get_app_config_class()
+    config = AppConfig()
+    config.load_config()
+    return api_response(data=config.get_player_settings())
+
+
+@router.post("/api/settings/player")
+async def update_player_settings(request: Request):
+    """Persist allowlisted player preferences without accepting arbitrary MPV options."""
+    AppConfig = _get_app_config_class()
+
+    try:
+        body = await _parse_request_body(request)
+        config = AppConfig()
+        config.load_config()
+        settings = config.update_player_settings(body)
+        config.save_config()
+        return api_response(data=settings)
+    except Exception as exc:
+        logger.exception("Update player settings failed")
         return api_response(code=500, message=str(exc))
 
 
@@ -667,37 +695,27 @@ async def get_favorites(
 
 @router.get("/api/movies/history")
 async def get_history(page: int = 1, page_size: int = 24):
-    movies = [m for m in lib.load_library() if isinstance(m.get("playback"), dict) and m.get("playback", {}).get("last_play_time")]
-    movies.sort(key=lambda m: m.get("playback", {}).get("last_play_time", ""), reverse=True)
-    total = len(movies)
-    start = (max(1, page) - 1) * page_size
+    movies, total = lib.continue_watching_records(lib.load_library(), page=page, page_size=page_size)
     items = []
-    for movie in movies[start:start + page_size]:
-        item = lib.movie_to_api_format(movie)
-        playback = movie.get("playback") if isinstance(movie.get("playback"), dict) else {}
-        item["playback"] = {
-            "currentEpisode": playback.get("current_episode", 0),
-            "currentTime": playback.get("current_time", 0),
-            "duration": playback.get("duration", 0),
-            "percent": playback.get("percent", 0),
-            "lastPlayTime": playback.get("last_play_time", ""),
-            "watchSeconds": playback.get("watch_seconds", 0),
-        }
-        item["lastPlayTime"] = playback.get("last_play_time", "")
-        item["watchSeconds"] = playback.get("watch_seconds", 0)
+    for movie in movies:
+        item = lib.history_item_to_api_format(movie)
         item["resumePosition"] = _resume_position(movie)
         items.append(item)
     return api_response(data={"list": items, "pagination": {"page": page, "pageSize": page_size, "total": total}})
 
 
 @router.get("/api/movies/stats")
-async def get_stats():
+async def get_stats(days: int = Query(90, ge=7, le=365)):
     movies = lib.load_library()
-    viewing_personality = analytics_service.build_personality_profile()
+    events = db_service.load_behavior_events()
+    now = datetime.now()
+    viewing_personality = analytics_service.build_personality_profile(days, movies, events, now)
     return api_response(data={
         **lib.compute_stats(movies),
         **lib.compute_home_stats(movies),
         **lib.compute_viewing_insights(movies),
+        "periodDays": days,
+        "activity": analytics_service.build_activity_summary(days, movies, events, now),
         "personality": viewing_personality,
         "viewingPersonality": viewing_personality,
     })
@@ -934,7 +952,6 @@ async def get_play_info(movie_id: str, episode_id: Optional[str] = None, player_
             headers = {"x-moviepop-prefetch": "parallel"} if source_type == "openlist" else {}
         else:
             play_url, headers = lib.resolve_play_url(movie, episode_id, source_service.load_sources())
-        _record_playback_start(effective_movie_id, episode_id)
         resume_position = _resume_position(effective_movie, episode_id)
         return api_response(data={
             "id": effective_movie_id,
@@ -1000,7 +1017,6 @@ def stream_movie(movie_id: str, request: Request, episode_id: Optional[str] = No
         return JSONResponse(status_code=404, content={"code": 404, "message": "Movie not found", "data": None})
 
     episode_id = _resolve_resume_episode_id(movie, episode_id)
-    _record_playback_start(_effective_movie_id(movie_id, episode_id), episode_id)
     sources = source_service.load_sources()
     try:
         play_url, headers = lib.resolve_play_url(movie, episode_id, sources)

@@ -2,11 +2,13 @@
 电影库管理服务
 封装电影/剧集的缓存加载、统计计算、API 格式转换等业务逻辑
 """
+import hashlib
 import logging
+import math
 import re
 from collections import Counter
 from datetime import datetime
-from urllib.parse import quote, urlparse
+from urllib.parse import quote, unquote, urlparse
 from typing import Any, Optional
 
 from . import db_service
@@ -88,6 +90,36 @@ def _api_category(category: Any) -> str:
     return CATEGORY_API_MAPPING.get(value, value.lower())
 
 
+def _category_from_media_path(movie: dict) -> str:
+    """Recover the scanned collection category from a media path when present.
+
+    Older scans may have had ``category`` overwritten by incomplete provider
+    metadata.  The path is the original scan input, so its collection segment
+    is the more reliable primary browse category in that situation.
+    """
+    for key in ("file_path", "path"):
+        raw_path = str(movie.get(key) or "").strip()
+        if not raw_path:
+            continue
+        parts = [part.strip() for part in unquote(raw_path).replace("\\", "/").split("/") if part.strip()]
+        for part in parts:
+            category = _api_category(part)
+            if category in {"anime", "series", "movie"}:
+                return category
+    return ""
+
+
+def _primary_browse_category(movie: dict) -> str:
+    """Return the directory-backed primary category, with legacy fallback."""
+    return _category_from_media_path(movie) or _api_category(movie.get("category"))
+
+
+def _as_bool(value: Any) -> bool:
+    if isinstance(value, str):
+        return value.strip().casefold() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
 def _has_animation_metadata(movie: dict) -> bool:
     """Detect animation from scraper metadata without changing directory category."""
     animation_labels = {
@@ -103,19 +135,25 @@ def _has_animation_metadata(movie: dict) -> bool:
 
 
 def _api_categories(movie: dict) -> list[str]:
-    primary_category = _api_category(movie.get("category"))
+    primary_category = _primary_browse_category(movie)
     categories = {primary_category}
 
     media_type = str(movie.get("media_type") or "").lower()
     tmdb_media_type = str(movie.get("tmdb_media_type") or "").lower()
     has_animation = _has_animation_metadata(movie)
+    is_not_series = "is_series" in movie and not _as_bool(movie.get("is_series"))
+    special_label = " ".join(
+        str(movie.get(key) or "")
+        for key in ("special_type", "season_title", "chapter_name", "version_title")
+    ).lower()
+    is_theatrical_release = any(label in special_label for label in ("剧场版", "电影版", "theatrical"))
 
     # The directory decides the primary category. Scraper metadata contributes
     # secondary browse categories, so animation films remain visible as movies.
     if primary_category == "movie" and has_animation:
         categories.add("anime")
     elif primary_category == "anime":
-        if tmdb_media_type == "movie" or media_type == "电影":
+        if tmdb_media_type == "movie" or media_type == "电影" or is_not_series or is_theatrical_release:
             categories.add("movie")
     
     return sorted(list(categories))
@@ -140,13 +178,19 @@ def _series_identity(movie: dict) -> str:
 def _resource_group_key(movie: dict) -> str:
     identity = _series_identity(movie)
     source_id = str(movie.get("source_id") or "")
-    category = _api_category(movie.get("category"))
-    base = f"{source_id}::{category}::{identity or movie.get('id') or movie.get('title')}"
-    
     tmdb_media_type = str(movie.get("tmdb_media_type") or "").lower()
+    category = _primary_browse_category(movie)
+
+    # Provider and directory categories can differ between seasons (for
+    # example anime vs. TV).  The parser's is_series flag remains available
+    # even when a selected provider does not return a TMDB media type.
+    is_series = _as_bool(movie.get("is_series")) or tmdb_media_type == "tv"
+    group_category = "series" if is_series else category
+    base = f"{source_id}::{group_category}::{identity or movie.get('id') or movie.get('title')}"
+
     is_movie_type = tmdb_media_type == "movie"
     
-    if category == "movie" or is_movie_type:
+    if is_movie_type or (category == "movie" and not is_series):
         movie_title = _identity_text(movie.get("title") or movie.get("id"))
         return f"{base}::{movie_title}"
 
@@ -171,6 +215,220 @@ def _movie_display_title(movie: dict) -> str:
     if _has_display_suffix(movie):
         return parsed_display
     return matched_title or parsed_display or local_title
+
+
+def _continue_context_key(value: Any) -> str:
+    """Create a forgiving key for de-duplicating compact playback labels."""
+    return re.sub(r"[\s·•|/、，,;；:：_\-]+", "", str(value or "").strip()).casefold()
+
+
+def _continue_episode_number(movie: dict, playback: dict) -> int:
+    """Read the active episode number from persisted playback data safely."""
+    for value in (playback.get("current_episode"), playback.get("episode_number")):
+        try:
+            number = int(value or 0)
+        except (TypeError, ValueError):
+            number = 0
+        if number > 0:
+            return number
+
+    episode_id = str(playback.get("current_episode_id") or playback.get("episode_id") or "").strip()
+    if episode_id:
+        episodes = playback.get("episodes") if isinstance(playback.get("episodes"), dict) else {}
+        entry = episodes.get(episode_id) if isinstance(episodes.get(episode_id), dict) else {}
+        try:
+            number = int(entry.get("episode_number") or 0)
+        except (TypeError, ValueError):
+            number = 0
+        if number > 0:
+            return number
+
+        match = re.search(r"(?:ep|e)(\d{1,4})(?:\D|$)", episode_id, re.IGNORECASE)
+        if match:
+            return int(match.group(1))
+    return 0
+
+
+def _continue_episode_title(movie: dict, episode_number: int) -> str:
+    """Return a non-generic episode title when the scanner retained one."""
+    if episode_number <= 0:
+        return ""
+    raw_episodes = movie.get("episodes")
+    if not isinstance(raw_episodes, list):
+        return ""
+
+    for index, episode in enumerate(raw_episodes):
+        if isinstance(episode, dict):
+            try:
+                number = int(episode.get("episode_number") or episode.get("episodeNumber") or index + 1)
+            except (TypeError, ValueError):
+                number = index + 1
+            title = str(episode.get("title") or episode.get("name") or "").strip()
+        else:
+            try:
+                number = int(episode)
+            except (TypeError, ValueError):
+                number = index + 1
+            title = ""
+        if number != episode_number or not title:
+            continue
+
+        normalized_title = _continue_context_key(title)
+        if re.fullmatch(
+            r"(?:第?\s*[一二三四五六七八九十百零〇两\d]+\s*集|(?:episode|ep|e)\s*0*\d+)",
+            title,
+            re.IGNORECASE,
+        ):
+            return ""
+        generic_titles = {
+            _continue_context_key(f"第 {episode_number} 集"),
+            _continue_context_key(f"E{episode_number}"),
+            _continue_context_key(f"EP{episode_number}"),
+            str(episode_number),
+        }
+        return "" if normalized_title in generic_titles else title
+    return ""
+
+
+def _is_plain_season_label(value: Any) -> bool:
+    """Whether a custom season value only repeats the season number."""
+    text = str(value or "").strip()
+    if not text:
+        return False
+    return bool(re.fullmatch(
+        r"(?:第?\s*[一二三四五六七八九十百零〇两\d]+\s*季|season\s*\d+|s\d+)",
+        text,
+        re.IGNORECASE,
+    ))
+
+
+def build_continue_watching_context(movie: dict) -> dict[str, Any]:
+    """Build concise, de-duplicated labels for a single resume-history record.
+
+    Home cards intentionally keep the work title as their primary title.  This
+    payload carries the resource axes that would otherwise be invisible when a
+    show has multiple seasons or a film has multiple encodes.
+    """
+    playback = movie.get("playback") if isinstance(movie.get("playback"), dict) else {}
+    is_series = _as_bool(movie.get("is_series")) or str(movie.get("type") or "").strip().lower() == "series" or str(movie.get("tmdb_media_type") or "").strip().lower() == "tv"
+
+    parts: list[str] = []
+    seen: set[str] = set()
+
+    def add(label: Any) -> str:
+        text = str(label or "").strip()
+        key = _continue_context_key(text)
+        if text and key and key not in seen:
+            seen.add(key)
+            parts.append(text)
+            return text
+        return ""
+
+    season_parts: list[str] = []
+    if is_series:
+        try:
+            season_number = int(movie.get("season") or 1)
+        except (TypeError, ValueError):
+            season_number = 1
+        raw_season_title = str(movie.get("season_title") or "").strip()
+        custom_season_title = add(raw_season_title)
+        if custom_season_title:
+            season_parts.append(custom_season_title)
+        # A descriptive custom name benefits from the numeric axis too; a
+        # plain "第一季" / "Season 1" is already that axis and must not repeat.
+        if season_number > 0 and (not custom_season_title or not _is_plain_season_label(raw_season_title)):
+            numeric_season = add(f"第 {season_number} 季")
+            if numeric_season:
+                season_parts.append(numeric_season)
+
+    version_label = add(movie.get("version_title"))
+    chapter_label = str(movie.get("chapter_name") or "").strip()
+    if not chapter_label:
+        try:
+            part = int(movie.get("part") or 0)
+        except (TypeError, ValueError):
+            part = 0
+        if part > 0:
+            chapter_label = f"第 {part} 部"
+    chapter_label = add(chapter_label)
+
+    episode_number = _continue_episode_number(movie, playback)
+    episode_parts: list[str] = []
+    if episode_number > 0:
+        episode_parts.append(add(f"第 {episode_number} 集"))
+        episode_title = add(_continue_episode_title(movie, episode_number))
+        if episode_title:
+            episode_parts.append(episode_title)
+
+    season_label = " · ".join(part for part in season_parts if part)
+    episode_label = " · ".join(part for part in episode_parts if part)
+    return {
+        "text": " · ".join(parts),
+        "parts": parts,
+        "seasonLabel": season_label,
+        "versionLabel": version_label,
+        "chapterLabel": chapter_label,
+        "episodeLabel": episode_label,
+    }
+
+
+def continue_watching_api_fields(movie: dict) -> dict[str, Any]:
+    """Expose the compact resume labels using the API's camelCase convention."""
+    context = build_continue_watching_context(movie)
+    playback = movie.get("playback") if isinstance(movie.get("playback"), dict) else {}
+    episode_key = str(playback.get("current_episode_id") or "").strip()
+    if not episode_key:
+        episode_number = _continue_episode_number(movie, playback)
+        episode_key = f"ep{episode_number}" if episode_number > 0 else "default"
+    resource_key = str(movie.get("id") or movie.get("file_path") or movie.get("path") or movie.get("title") or "unknown")
+    return {
+        "continueContext": context["text"],
+        "continueContextParts": context["parts"],
+        "continueSeasonLabel": context["seasonLabel"],
+        "continueVersionLabel": context["versionLabel"],
+        "continueChapterLabel": context["chapterLabel"],
+        "continueEpisodeLabel": context["episodeLabel"],
+        # Keep Vue's card identity independent from a shared work title.
+        "continueCardKey": f"{resource_key}::{episode_key}",
+    }
+
+
+def history_item_to_api_format(movie: dict) -> dict[str, Any]:
+    """Return the history-specific API representation for one physical resource."""
+    item = movie_to_api_format(movie)
+    playback = movie.get("playback") if isinstance(movie.get("playback"), dict) else {}
+    item["playback"] = {
+        "currentEpisode": playback.get("current_episode", 0),
+        "currentTime": playback.get("current_time", 0),
+        "duration": playback.get("duration", 0),
+        "percent": playback.get("percent", 0),
+        "lastPlayTime": playback.get("last_play_time", ""),
+        "watchSeconds": playback.get("watch_seconds", 0),
+    }
+    item["lastPlayTime"] = playback.get("last_play_time", "")
+    item["watchSeconds"] = playback.get("watch_seconds", 0)
+    item.update(continue_watching_api_fields(movie))
+    return item
+
+
+def continue_watching_records(movies: list[dict], page: int = 1, page_size: int = 24) -> tuple[list[dict], int]:
+    """Select a page of physical resources with playback history, newest first."""
+    records = [
+        movie for movie in movies
+        if isinstance(movie.get("playback"), dict) and movie.get("playback", {}).get("last_play_time")
+    ]
+    records.sort(key=lambda movie: str(movie.get("playback", {}).get("last_play_time") or ""), reverse=True)
+    total = len(records)
+    try:
+        page_number = max(1, int(page or 1))
+    except (TypeError, ValueError):
+        page_number = 1
+    try:
+        size = max(1, int(page_size or 24))
+    except (TypeError, ValueError):
+        size = 24
+    start = (page_number - 1) * size
+    return records[start:start + size], total
 
 
 def _home_group_key(movie: dict) -> str:
@@ -300,7 +558,7 @@ def get_recommendations(movie_id: str, limit: int = 12) -> list[dict]:
 
     library = load_library()
     movie_identity = _series_identity(movie)
-    movie_category = _api_category(movie.get("category"))
+    movie_category = _primary_browse_category(movie)
     exclude_ids = {str(movie.get("id") or "")}
 
     recommendations = []
@@ -319,7 +577,7 @@ def get_recommendations(movie_id: str, limit: int = 12) -> list[dict]:
         for item in library:
             if str(item.get("id") or "") in exclude_ids:
                 continue
-            if _api_category(item.get("category")) == movie_category:
+            if _primary_browse_category(item) == movie_category:
                 recommendations.append(item)
                 exclude_ids.add(str(item.get("id") or ""))
                 if len(recommendations) >= limit:
@@ -414,7 +672,7 @@ def compute_stats(movies: list) -> dict:
         "watchSeconds": 0,
     }
     for m in movies:
-        cat = (m.get("category") or "").strip().lower()
+        cat = _primary_browse_category(m)
         if cat in {"movie", "电影"}:
             stats["movies"] += 1
         elif cat in {"series", "电视剧", "剧集", "tv"}:
@@ -466,6 +724,7 @@ def compute_home_stats(movies: list) -> dict:
 def compute_viewing_insights(movies: list) -> dict:
     """Build real viewing-stat data for the statistics page."""
     total = len(movies)
+    logical_titles = len(_collapse_home_movies(movies))
     watched_movies = [m for m in movies if _is_watched_movie(m)]
     watched_count = len(watched_movies)
     completed_count = sum(1 for m in movies if _playback_percent(m) >= 90)
@@ -475,8 +734,8 @@ def compute_viewing_insights(movies: list) -> dict:
     progress_total = sum(_playback_percent(m) for m in watched_movies)
     rating_values = [_safe_float(m.get("rating")) for m in movies if _safe_float(m.get("rating")) > 0]
 
-    category_counter = Counter(_category_label(_api_category(m.get("category"))) for m in movies)
-    watched_category_counter = Counter(_category_label(_api_category(m.get("category"))) for m in watched_movies)
+    category_counter = Counter(_category_label(_primary_browse_category(m)) for m in movies)
+    watched_category_counter = Counter(_category_label(_primary_browse_category(m)) for m in watched_movies)
     source_counter = Counter(_source_label(m.get("source_type")) for m in movies)
     tag_counter = Counter()
     for movie in movies:
@@ -506,6 +765,8 @@ def compute_viewing_insights(movies: list) -> dict:
 
     overview = {
         "total": total,
+        "resourceEntries": total,
+        "logicalTitles": logical_titles,
         "watched": watched_count,
         "completed": completed_count,
         "inProgress": in_progress_count,
@@ -630,7 +891,7 @@ def movie_to_api_format(movie: dict) -> dict:
     display_title = _movie_display_title(movie)
     
     # 将中文 category 转换为前端能识别的英文格式
-    category = _api_category(category)
+    category = _primary_browse_category(movie)
 
     # 安全获取 playback 字段（防止类型错误）
     playback = movie.get("playback", {})
@@ -644,13 +905,20 @@ def movie_to_api_format(movie: dict) -> dict:
 
     parsed_type = str(movie.get("type") or "").lower()
     media_type = str(movie.get("media_type") or "").lower()
+    tmdb_media_type = str(movie.get("tmdb_media_type") or "").lower()
     
     if parsed_type:
         is_series = parsed_type == "series"
+    elif tmdb_media_type == "tv":
+        is_series = True
+    elif tmdb_media_type == "movie":
+        is_series = False
     elif media_type == "电影":
         is_series = False
     elif media_type == "剧集":
         is_series = True
+    elif "is_series" in movie:
+        is_series = _as_bool(movie.get("is_series"))
     else:
         is_series = category in {"series", "tv"}
     
@@ -1111,20 +1379,231 @@ def _resolve_webdav_source_base_url(source: dict) -> str:
 
 # ==================== 首页数据构建 ====================
 
-def build_home_data(movies: list, category: Optional[str], limit: int) -> dict:
-    """构建首页数据"""
-    if category and category != "all":
-        target_category = str(category).lower()
-        movies = [
-            m for m in movies
-            if target_category in _api_categories(m)
-        ]
-    movies = _collapse_home_movies(movies)
+def _home_timestamp(value: Any) -> float:
+    """Return a comparable timestamp without letting malformed legacy dates affect ranking."""
+    parsed = _parse_datetime(value)
+    if not parsed:
+        return 0.0
+    try:
+        return parsed.timestamp()
+    except (OSError, OverflowError, ValueError):
+        return 0.0
 
-    stats = compute_home_stats(movies)
+
+def _normalized_rating(movie: dict) -> float:
+    """Normalize common 10-point and 100-point scraper scores to 0..1."""
+    rating = max(0.0, _safe_float(movie.get("rating")))
+    if rating > 10:
+        rating /= 100
+    else:
+        rating /= 10
+    return _clamp(rating, 0, 1)
+
+
+def _home_preference_weights(movies: list[dict]) -> tuple[Counter, Counter]:
+    """Build lightweight preference signals from locally stored playback state only."""
+    category_weights: Counter = Counter()
+    genre_weights: Counter = Counter()
+    for movie in movies:
+        if not _is_watched_movie(movie):
+            continue
+
+        watched_seconds = max(_playback_watch_seconds(movie), _playback_current_time(movie))
+        # A short preview still says something, while long watches do not
+        # overwhelm every other signal.
+        weight = min(1.0, 0.25 + math.log1p(watched_seconds) / math.log1p(60 * 60))
+        if _playback_percent(movie) >= 90:
+            weight *= 0.8
+
+        category_weights[_primary_browse_category(movie)] += weight
+        for genre in _as_list(movie.get("genres")):
+            genre_weights[str(genre).strip().casefold()] += weight
+    return category_weights, genre_weights
+
+
+def _daily_recommendation_tiebreaker(movie: dict, day_key: str) -> str:
+    """Keep ordering stable during one day while allowing equal candidates to rotate later."""
+    identity = str(movie.get("id") or movie.get("title") or "")
+    return hashlib.sha256(f"{day_key}:{identity}".encode("utf-8")).hexdigest()
+
+
+def _home_recommendation_entry(
+    movie: dict,
+    category_weights: Counter,
+    genre_weights: Counter,
+    now_timestamp: float,
+    day_key: str,
+) -> dict:
+    """Score a collapsed library item with transparent, local-only signals."""
+    playback = _playback(movie)
+    progress = _playback_percent(movie)
+    is_resume = 0 < progress < 90 or (
+        _playback_current_time(movie) > 0 and progress < 90
+    )
+    rating = _normalized_rating(movie)
+    vote_count = max(0.0, _safe_float(movie.get("vote_count")))
+
+    # ``added_at`` is the first time the scanner saw an item.  Older library
+    # entries use their last-known update time as a safe compatibility fallback.
+    added_timestamp = _home_timestamp(movie.get("added_at") or movie.get("updated_at"))
+    added_age_days = max(0.0, (now_timestamp - added_timestamp) / 86400) if added_timestamp else 9999.0
+    freshness = max(0.0, 1.0 - min(added_age_days / 120, 1.0))
+
+    category = _primary_browse_category(movie)
+    max_category_weight = max(category_weights.values(), default=0)
+    category_affinity = (
+        category_weights.get(category, 0.0) / max_category_weight
+        if max_category_weight else 0.0
+    )
+    max_genre_weight = max(genre_weights.values(), default=0)
+    genre_affinity = 0.0
+    if max_genre_weight:
+        genre_affinity = max(
+            (genre_weights.get(str(genre).strip().casefold(), 0.0) / max_genre_weight
+             for genre in _as_list(movie.get("genres"))),
+            default=0.0,
+        )
+
+    score = 0.0
+    # The continuation row already owns resumable titles, so retain at most
+    # one there later; it is helpful but must not turn the hero into six copies
+    # of "continue watching".
+    if is_resume:
+        score += 42
+    if movie.get("is_favorite"):
+        score += 24
+    score += rating * 30
+    if vote_count:
+        score += min(6.0, math.log1p(vote_count) / math.log1p(1000) * 6.0)
+    score += freshness * 22
+    score += category_affinity * 15
+    score += genre_affinity * 7
+
+    if is_resume:
+        reason = "继续观看"
+    elif movie.get("is_favorite"):
+        reason = "收藏优先"
+    elif rating >= 0.78:
+        reason = "高分优选"
+    elif freshness >= 0.45:
+        reason = "最近入库"
+    elif category_affinity >= 0.5 or genre_affinity >= 0.5:
+        reason = "偏好推荐"
+    else:
+        reason = "为你推荐"
+
+    return {
+        "movie": movie,
+        "score": score,
+        "is_resume": is_resume,
+        "reason": reason,
+        "category": category,
+        "daily_tiebreaker": _daily_recommendation_tiebreaker(movie, day_key),
+    }
+
+
+def _build_home_hero(movies: list[dict], limit: int = 5, now: Optional[datetime] = None) -> list[dict]:
+    """Choose diverse hero recommendations from local library metadata and history.
+
+    The function deliberately does not make network calls or use random state:
+    one library state yields the same carousel for the whole calendar day.
+    """
+    if limit <= 0:
+        return []
+
+    now = now or datetime.now()
+    now_timestamp = now.timestamp()
+    day_key = now.date().isoformat()
+    category_weights, genre_weights = _home_preference_weights(movies)
+    raw_entries = [
+        _home_recommendation_entry(movie, category_weights, genre_weights, now_timestamp, day_key)
+        for movie in movies
+    ]
+    grouped_entries: dict[str, list[dict]] = {}
+    for entry in raw_entries:
+        grouped_entries.setdefault(_home_group_key(entry["movie"]), []).append(entry)
+
+    # Score actual resources before collapsing them.  That way a progress
+    # record on Season 2 or an SDR version wins over the default Season 1/
+    # Dolby representative, while each logical title still appears only once.
+    entries = []
+    for group in grouped_entries.values():
+        group.sort(key=lambda entry: (
+            -entry["score"],
+            entry["daily_tiebreaker"],
+            str(entry["movie"].get("id") or ""),
+        ))
+        chosen = group[0]
+        visual_entries = [
+            entry for entry in group
+            if str(entry["movie"].get("backdrop_url") or entry["movie"].get("cover_url") or "").strip()
+        ]
+        if not visual_entries:
+            continue
+
+        # A season/version can have a real resume point without its own
+        # artwork.  Borrow the group's artwork only for presentation; retain
+        # the chosen resource ID so play always opens the correct season/version.
+        visual_entries.sort(key=lambda entry: (
+            -entry["score"],
+            entry["daily_tiebreaker"],
+        ))
+        presentation_movie = dict(chosen["movie"])
+        artwork_movie = visual_entries[0]["movie"]
+        if not presentation_movie.get("backdrop_url"):
+            presentation_movie["backdrop_url"] = artwork_movie.get("backdrop_url") or artwork_movie.get("cover_url") or ""
+        if not presentation_movie.get("cover_url"):
+            presentation_movie["cover_url"] = artwork_movie.get("cover_url") or artwork_movie.get("backdrop_url") or ""
+        chosen = {**chosen, "presentation_movie": presentation_movie}
+        entries.append(chosen)
+
+    entries.sort(key=lambda entry: (
+        -entry["score"],
+        entry["daily_tiebreaker"],
+        str(entry["movie"].get("title") or "").casefold(),
+        str(entry["movie"].get("id") or ""),
+    ))
+
+    selected: list[dict] = []
+    category_counts: Counter = Counter()
+    resume_count = 0
+    category_count = len({entry["category"] for entry in entries})
+    max_per_category = 2 if category_count > 1 else limit
+
+    # First pass produces a varied showcase: one resumable title at most and
+    # no category monopolizes all slides when alternatives exist.
+    for entry in entries:
+        if len(selected) >= limit:
+            break
+        if entry["is_resume"] and resume_count >= 1:
+            continue
+        if category_counts[entry["category"]] >= max_per_category:
+            continue
+        selected.append(entry)
+        category_counts[entry["category"]] += 1
+        resume_count += int(entry["is_resume"])
+
+    # Sparse libraries should still get all available visual items.  Relax
+    # diversity constraints in a deterministic order rather than returning a
+    # short, seemingly broken carousel.
+    for entry in entries:
+        if len(selected) >= limit:
+            break
+        if entry in selected:
+            continue
+        if entry["is_resume"] and resume_count >= 1:
+            continue
+        selected.append(entry)
+        resume_count += int(entry["is_resume"])
+    for entry in entries:
+        if len(selected) >= limit:
+            break
+        if entry not in selected:
+            selected.append(entry)
+
     hero = []
-    for m in movies[:5]:
-        api_item = movie_to_api_format(m)
+    for entry in selected:
+        api_item = movie_to_api_format(entry.get("presentation_movie") or entry["movie"])
         hero.append({
             "id": api_item["id"],
             "title": api_item["title"],
@@ -1135,8 +1614,26 @@ def build_home_data(movies: list, category: Optional[str], limit: int) -> dict:
             "durationText": api_item["durationText"],
             "backdropUrl": api_item.get("backdropUrl", api_item.get("coverUrl", "")),
             "tags": api_item["tags"],
+            "description": api_item.get("description", ""),
+            "rating": api_item.get("score", 0),
+            "recommendationReason": entry["reason"],
+            "isResume": entry["is_resume"],
         })
+    return hero
 
+
+def build_home_data(movies: list, category: Optional[str], limit: int, now: Optional[datetime] = None) -> dict:
+    """Build homepage data with a locally ranked, stable daily carousel."""
+    if category and category != "all":
+        target_category = str(category).lower()
+        movies = [
+            m for m in movies
+            if target_category in _api_categories(m)
+        ]
+    hero = _build_home_hero(movies, limit=5, now=now)
+    movies = _collapse_home_movies(movies)
+
+    stats = compute_home_stats(movies)
     items = [movie_to_api_format(m) for m in movies[:limit]]
 
     return {

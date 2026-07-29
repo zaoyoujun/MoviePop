@@ -288,6 +288,27 @@ class CoverScraper:
     def _has_metadata(value: dict) -> bool:
         return bool(value and (value.get("title") or value.get("cover_url") or value.get("description")))
 
+    def _scrape_provider(self, provider: str, title: str, category: str, year: int,
+                         season: int, season_title: str, aliases: list[str] | None,
+                         origin_countries: list[str] | None, chapter_name: str,
+                         part: int | None) -> dict:
+        """Scrape one provider, used when the user selected a preferred source."""
+        if provider == "anibk":
+            return self._scrape_anibk(title, year, season, season_title, chapter_name, part)
+        if provider == "douban":
+            return self._scrape_douban(title, year, season, chapter_name, part)
+        return self._scrape_tmdb(
+            title,
+            year,
+            season,
+            category,
+            season_title,
+            aliases,
+            origin_countries,
+            chapter_name,
+            part,
+        )
+
     @staticmethod
     def _merge_douban_facts(primary: dict, douban_meta: dict, allow_cover: bool = False) -> dict:
         merged = dict(primary or {})
@@ -341,6 +362,30 @@ class CoverScraper:
         # docstring removed after encoding cleanup
         result = self._empty_result(year)
         if not title or len(title) < 2:
+            return result
+
+        configured_source = str(getattr(self.config, "SCRAPE_SOURCE", "auto") or "auto").strip().lower()
+        if configured_source in {"anibk", "douban", "tmdb"}:
+            # A configured source used to affect only log output while every
+            # provider was still queried.  Try the selected source first and
+            # only fall back when it has no usable result.
+            for provider in self._scrape_source_order(category):
+                candidate = self._scrape_provider(
+                    provider,
+                    title,
+                    category,
+                    year,
+                    season,
+                    season_title,
+                    aliases,
+                    origin_countries,
+                    chapter_name,
+                    part,
+                )
+                if self._has_metadata(candidate):
+                    if not candidate.get("backdrop_url"):
+                        candidate["backdrop_url"] = candidate.get("cover_url", "")
+                    return candidate
             return result
 
         if self._category_kind(category) == "anime":

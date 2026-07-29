@@ -490,8 +490,44 @@ function normalizeDetail(data) {
     }
   })
 
+  // The API's `versions` carries the individual logical entries (a version or
+  // a season chapter). Prefer it over `seasons`, whose episode lists are an
+  // aggregate used only to build the season navigation.
   const versions = []
-  if (data.seasons && Array.isArray(data.seasons) && data.seasons.length) {
+  const seenVersionMovies = new Set()
+  const detailedVersionEntries = Array.isArray(data.versions)
+    ? data.versions.flatMap(version => Array.isArray(version.seasons) ? version.seasons : [])
+    : []
+
+  detailedVersionEntries.forEach((entry, idx) => {
+    const movieId = entry.movieId || entry.id || data.id
+    if (seenVersionMovies.has(movieId)) return
+    seenVersionMovies.add(movieId)
+    const isChapterLabel = entry.chapterName && entry.versionTitle === entry.chapterName
+    const chapterOrVersionName = isChapterLabel
+      ? `${entry.chapterName}${entry.part ? ` #${entry.part}` : ''}`
+      : entry.versionTitle || entry.chapterName || entry.name || `版本 ${idx + 1}`
+    versions.push({
+      id: entry.id || movieId,
+      movieId,
+      name: chapterOrVersionName,
+      displayTitle: entry.displayTitle || entry.title || entry.name || '',
+      description: entry.description || '',
+      score: entry.score || 0,
+      year: entry.year || '',
+      tags: entry.tags || [],
+      coverUrl: entry.coverUrl || '',
+      backdropUrl: entry.backdropUrl || entry.coverUrl || '',
+      seasonNumber: entry.seasonNumber || 1,
+      seasonTitle: entry.seasonTitle || '',
+      chapterName: entry.chapterName || '',
+      part: entry.part || 0,
+      versionTitle: entry.versionTitle || '',
+      episodes: normalizeEpisodes(entry.episodes)
+    })
+  })
+
+  if (!versions.length && data.seasons && Array.isArray(data.seasons) && data.seasons.length) {
     data.seasons.forEach((season, idx) => {
       versions.push({
         id: season.id,
@@ -504,11 +540,13 @@ function normalizeDetail(data) {
         tags: season.tags || [],
         coverUrl: season.coverUrl || '',
         backdropUrl: season.backdropUrl || season.coverUrl || '',
+        seasonNumber: season.seasonNumber || idx + 1,
+        seasonTitle: season.seasonTitle || '',
         versionTitle: season.versionTitle || '',
         episodes: normalizeEpisodes(season.episodes)
       })
     })
-  } else if (data.episodes && Array.isArray(data.episodes)) {
+  } else if (!versions.length && data.episodes && Array.isArray(data.episodes)) {
     versions.push({
       name: '原版',
       movieId: data.id,
@@ -524,6 +562,18 @@ function normalizeDetail(data) {
       movieId: v.movieId || v.seasons?.[0]?.movieId || '',
       seasons: Array.isArray(v.seasons) ? v.seasons : []
     }))
+    : []
+
+  const seasons = Array.isArray(data.seasons)
+    ? data.seasons.map((season, index) => {
+      const seasonNumber = Number(season.seasonNumber || index + 1)
+      const seasonTitle = String(season.seasonTitle || '').trim()
+      return {
+        ...season,
+        seasonNumber,
+        name: formatSeasonNavigationName(seasonNumber, seasonTitle)
+      }
+    })
     : []
 
   const tags = Array.isArray(data.tags) ? data.tags : []
@@ -562,8 +612,26 @@ function normalizeDetail(data) {
     metadataSource: data.metadataSource || '',
     metadataLocked: data.metadataLocked || false,
     versions,
+    seasons,
     mediaVersions
   }
+}
+
+function formatSeasonNavigationName(seasonNumber, seasonTitle = '') {
+  const chineseNumbers = ['', '一', '二', '三', '四', '五', '六', '七', '八', '九', '十']
+  const ordinal = chineseNumbers[seasonNumber] || String(seasonNumber)
+  const seasonName = `第${ordinal}季`
+  const title = String(seasonTitle || '').trim()
+
+  // 特殊内容不是正片季，不附加季号。
+  if (/^(特别收录|特别篇|剧场版|OAD|OVA)$/i.test(title)) return title
+  // 有些来源会把“第一季”本身写入 season_title；它不是副标题，
+  // 不能再和统一格式化后的季号拼接，否则会显示为“第一季 第一季”。
+  const titleWithoutSeasonMarker = title
+    .replace(/(?:第?\s*[一二三四五六七八九十\d]+\s*季|season\s*\d+|s\s*\d+)/gi, '')
+    .replace(/[\s._-]+/g, '')
+  if (!titleWithoutSeasonMarker) return seasonName
+  return title ? `${title} ${seasonName}` : seasonName
 }
 
 watch(() => route.params.id, () => { fetchDetail() }, { immediate: true })
@@ -866,7 +934,7 @@ function handlePlay() {
       doPlayEpisode(ep, currentVersion.value)
     }
   } else {
-    doPlayMovie(d)
+    doPlayMovie(d, currentVersion.value)
   }
 
   setTimeout(() => { isPlaying.value = false }, 3000)
@@ -904,15 +972,17 @@ function handleVersionPlay(episode) {
   setTimeout(() => { isPlaying.value = false }, 3000)
 }
 
-function doPlayMovie(d) {
+function doPlayMovie(d, versionIdx = currentVersion.value) {
+  const selectedVersion = d.versions?.[versionIdx] || {}
+  const selectedMovieId = selectedVersion.movieId || d.id
   startPlay({
-    movieId: d.id,
-    movieTitle: d.title,
+    movieId: selectedMovieId,
+    movieTitle: selectedVersion.displayTitle || d.title,
     episodeId: '',
     episodeTitle: '',
-    cover: d.poster || d.backdrop || '',
+    cover: selectedVersion.coverUrl || selectedVersion.backdropUrl || d.poster || d.backdrop || '',
     episodeList: [],
-    seasonIndex: 0
+    seasonIndex: versionIdx
   })
 }
 

@@ -13,6 +13,19 @@ class AppConfig:
 
     # 可用的 UI 主题列表
     AVAILABLE_THEMES = ("amber", "graphite", "forest", "coast")
+    PLAYER_HWDEC_CHOICES = ("auto-copy", "auto-safe", "no")
+    PLAYER_ENHANCEMENT_CHOICES = (
+        "original",
+        "clean",
+        "sharp",
+        "clarity",
+        "anime_light",
+        "anime_strong",
+        "ai_general",
+        "ai_quality",
+    )
+    PLAYER_FRAME_PROFILE_CHOICES = ("off", "natural", "smooth", "display")
+    PLAYER_SUBTITLE_MODE_CHOICES = ("auto", "off")
 
     def __new__(cls):
         if cls._instance is None:
@@ -69,6 +82,15 @@ class AppConfig:
         self.INTERFACE_THEME = "amber"
         self.INTERFACE_LANGUAGE = "zh"
 
+        # 播放器配置。仅保存经过白名单校验的预设 ID，绝不透传 MPV 参数。
+        self.PLAYER_HWDEC = "auto-copy"
+        self.PLAYER_ENHANCEMENT_PROFILE = "original"
+        self.PLAYER_FRAME_PROFILE = "off"
+        self.PLAYER_SUBTITLE_MODE = "auto"
+        self.PLAYER_SHOW_PLAYBACK_INFO = True
+        self.PLAYER_ALWAYS_ON_TOP = False
+        self.PLAYER_DEFAULT_VOLUME = 80
+
         # 确保数据目录存在
         self.DATA_DIR.mkdir(parents=True, exist_ok=True)
         self.COVERS_DIR.mkdir(parents=True, exist_ok=True)
@@ -124,6 +146,42 @@ class AppConfig:
             self.INTERFACE_THEME = data.get("interface_theme", self.INTERFACE_THEME)
             self.INTERFACE_LANGUAGE = data.get("interface_language", self.INTERFACE_LANGUAGE)
 
+            # 播放器设置：旧配置不存在时保留默认值，非法值自动回退到安全默认值。
+            self.PLAYER_HWDEC = self._choice(
+                data.get("player_hwdec", self.PLAYER_HWDEC),
+                self.PLAYER_HWDEC,
+                self.PLAYER_HWDEC_CHOICES,
+            )
+            self.PLAYER_ENHANCEMENT_PROFILE = self._choice(
+                data.get("player_enhancement_profile", self.PLAYER_ENHANCEMENT_PROFILE),
+                self.PLAYER_ENHANCEMENT_PROFILE,
+                self.PLAYER_ENHANCEMENT_CHOICES,
+            )
+            self.PLAYER_FRAME_PROFILE = self._choice(
+                data.get("player_frame_profile", self.PLAYER_FRAME_PROFILE),
+                self.PLAYER_FRAME_PROFILE,
+                self.PLAYER_FRAME_PROFILE_CHOICES,
+            )
+            self.PLAYER_SUBTITLE_MODE = self._choice(
+                data.get("player_subtitle_mode", self.PLAYER_SUBTITLE_MODE),
+                self.PLAYER_SUBTITLE_MODE,
+                self.PLAYER_SUBTITLE_MODE_CHOICES,
+            )
+            self.PLAYER_SHOW_PLAYBACK_INFO = self._coerce_bool(
+                data.get("player_show_playback_info", self.PLAYER_SHOW_PLAYBACK_INFO),
+                self.PLAYER_SHOW_PLAYBACK_INFO,
+            )
+            self.PLAYER_ALWAYS_ON_TOP = self._coerce_bool(
+                data.get("player_always_on_top", self.PLAYER_ALWAYS_ON_TOP),
+                self.PLAYER_ALWAYS_ON_TOP,
+            )
+            self.PLAYER_DEFAULT_VOLUME = self._bounded_int(
+                data.get("player_default_volume", self.PLAYER_DEFAULT_VOLUME),
+                self.PLAYER_DEFAULT_VOLUME,
+                0,
+                100,
+            )
+
         except (json.JSONDecodeError, IOError):
             # 配置文件损坏，使用默认值
             self.save_config()
@@ -161,6 +219,13 @@ class AppConfig:
             "ui_theme": self.UI_THEME,
             "interface_theme": self.INTERFACE_THEME,
             "interface_language": self.INTERFACE_LANGUAGE,
+            "player_hwdec": self.PLAYER_HWDEC,
+            "player_enhancement_profile": self.PLAYER_ENHANCEMENT_PROFILE,
+            "player_frame_profile": self.PLAYER_FRAME_PROFILE,
+            "player_subtitle_mode": self.PLAYER_SUBTITLE_MODE,
+            "player_show_playback_info": self.PLAYER_SHOW_PLAYBACK_INFO,
+            "player_always_on_top": self.PLAYER_ALWAYS_ON_TOP,
+            "player_default_volume": self.PLAYER_DEFAULT_VOLUME,
         }
 
         self.DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -201,6 +266,78 @@ class AppConfig:
             "available_themes": list(self.AVAILABLE_THEMES),
             "interface_language": self.INTERFACE_LANGUAGE,
         }
+
+    @staticmethod
+    def _choice(value, default: str, choices: tuple[str, ...]) -> str:
+        candidate = str(value or "").strip()
+        return candidate if candidate in choices else default
+
+    @staticmethod
+    def _coerce_bool(value, default: bool) -> bool:
+        if isinstance(value, bool):
+            return value
+        if value is None:
+            return default
+        return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+    @staticmethod
+    def _bounded_int(value, default: int, low: int, high: int) -> int:
+        try:
+            return max(low, min(high, int(value)))
+        except (TypeError, ValueError):
+            return default
+
+    def get_player_settings(self) -> dict:
+        """Return the safe, version-stable preferences used by new player windows."""
+        return {
+            "hwdec": self.PLAYER_HWDEC,
+            "enhancement_profile": self.PLAYER_ENHANCEMENT_PROFILE,
+            "frame_profile": self.PLAYER_FRAME_PROFILE,
+            "subtitle_mode": self.PLAYER_SUBTITLE_MODE,
+            "show_playback_info": bool(self.PLAYER_SHOW_PLAYBACK_INFO),
+            "always_on_top": bool(self.PLAYER_ALWAYS_ON_TOP),
+            "volume": int(self.PLAYER_DEFAULT_VOLUME),
+        }
+
+    def update_player_settings(self, values: dict) -> dict:
+        """Update player preferences from a narrow UI-facing allowlist."""
+        if not isinstance(values, dict):
+            values = {}
+
+        if "hwdec" in values:
+            self.PLAYER_HWDEC = self._choice(values.get("hwdec"), self.PLAYER_HWDEC, self.PLAYER_HWDEC_CHOICES)
+        if "enhancement_profile" in values or "enhancementProfile" in values:
+            self.PLAYER_ENHANCEMENT_PROFILE = self._choice(
+                values.get("enhancement_profile", values.get("enhancementProfile")),
+                self.PLAYER_ENHANCEMENT_PROFILE,
+                self.PLAYER_ENHANCEMENT_CHOICES,
+            )
+        if "frame_profile" in values or "frameProfile" in values:
+            self.PLAYER_FRAME_PROFILE = self._choice(
+                values.get("frame_profile", values.get("frameProfile")),
+                self.PLAYER_FRAME_PROFILE,
+                self.PLAYER_FRAME_PROFILE_CHOICES,
+            )
+        if "subtitle_mode" in values or "subtitleMode" in values:
+            self.PLAYER_SUBTITLE_MODE = self._choice(
+                values.get("subtitle_mode", values.get("subtitleMode")),
+                self.PLAYER_SUBTITLE_MODE,
+                self.PLAYER_SUBTITLE_MODE_CHOICES,
+            )
+        if "show_playback_info" in values or "showPlaybackInfo" in values:
+            self.PLAYER_SHOW_PLAYBACK_INFO = self._coerce_bool(
+                values.get("show_playback_info", values.get("showPlaybackInfo")),
+                self.PLAYER_SHOW_PLAYBACK_INFO,
+            )
+        if "always_on_top" in values or "alwaysOnTop" in values:
+            self.PLAYER_ALWAYS_ON_TOP = self._coerce_bool(
+                values.get("always_on_top", values.get("alwaysOnTop")),
+                self.PLAYER_ALWAYS_ON_TOP,
+            )
+        if "volume" in values:
+            self.PLAYER_DEFAULT_VOLUME = self._bounded_int(values.get("volume"), self.PLAYER_DEFAULT_VOLUME, 0, 100)
+
+        return self.get_player_settings()
 
     def normalize_remote_provider(self, provider: str) -> str:
         """标准化远程数据源提供者标识"""

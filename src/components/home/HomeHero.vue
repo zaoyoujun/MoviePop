@@ -16,7 +16,7 @@
         <img :src="item.backdrop" :alt="item.title" class="hero-image" />
         <div class="hero-shade"></div>
         <div class="hero-copy">
-          <span class="hero-kicker">正在推荐</span>
+          <span class="hero-kicker">{{ item.recommendationReason || '正在推荐' }}</span>
           <div class="title-row">
             <h1>{{ item.title }}</h1>
             <strong v-if="item.rating">{{ item.rating }}</strong>
@@ -29,7 +29,7 @@
           <div class="hero-actions">
             <button class="primary-action" @click="$emit('play', item.id)">
               <n-icon><Play /></n-icon>
-              继续播放
+              {{ item.isResume ? '继续播放' : '立即播放' }}
             </button>
             <button class="ghost-action" @click="$emit('detail', item.id)">
               <n-icon><InformationCircleOutline /></n-icon>
