@@ -71,7 +71,12 @@ def init_db():
             display_title TEXT,
             is_favorite INTEGER DEFAULT 0,
             metadata_locked INTEGER DEFAULT 0,
-            added_at TEXT
+            added_at TEXT,
+            chapter_name TEXT,
+            home_display INTEGER DEFAULT 0,
+            release_date TEXT,
+            release_date_checked INTEGER DEFAULT 0,
+            rating_checked INTEGER DEFAULT 0
         )
     ''')
 
@@ -102,6 +107,11 @@ def init_db():
         'is_favorite': 'INTEGER DEFAULT 0',
         'metadata_locked': 'INTEGER DEFAULT 0',
         'added_at': 'TEXT',
+        'chapter_name': 'TEXT',
+        'home_display': 'INTEGER DEFAULT 0',
+        'release_date': 'TEXT',
+        'release_date_checked': 'INTEGER DEFAULT 0',
+        'rating_checked': 'INTEGER DEFAULT 0',
     }.items():
         if column_name not in existing_movie_columns:
             cursor.execute(f'ALTER TABLE movies ADD COLUMN {column_name} {column_type}')
@@ -161,12 +171,13 @@ def init_db():
     conn.commit()
     conn.close()
 
-def save_library(movies):
+def save_library(movies, replace=True):
     """保存电影库到数据库"""
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=10)
     cursor = conn.cursor()
 
-    cursor.execute('DELETE FROM movies')
+    if replace:
+        cursor.execute('DELETE FROM movies')
     
     for movie in movies:
         # 转换复杂字段为 JSON
@@ -188,8 +199,9 @@ def save_library(movies):
                 duration, genres, countries, languages, metadata_source,
                 original_title, tmdb_id, tmdb_media_type, douban_url, vote_count,
                 release_group, video_codec, audio_info, franchise, search_title, series_title, part,
-                metadata_title, version_title, display_title, is_favorite, metadata_locked, added_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                metadata_title, version_title, display_title, is_favorite, metadata_locked, added_at, chapter_name, home_display,
+                release_date, release_date_checked, rating_checked
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             movie.get('id', ''),
             movie.get('name', ''),
@@ -241,11 +253,102 @@ def save_library(movies):
             movie.get('display_title', ''),
             1 if movie.get('is_favorite') or movie.get('isFavorite') else 0,
             1 if movie.get('metadata_locked') or movie.get('metadataLocked') else 0,
-            movie.get('added_at') or movie.get('updated_at') or datetime.now().isoformat()
+            movie.get('added_at') or movie.get('updated_at') or datetime.now().isoformat(),
+            movie.get('chapter_name', ''),
+            1 if movie.get('home_display') or movie.get('homeDisplay') else 0,
+            movie.get('release_date', ''),
+            1 if movie.get('release_date_checked') or movie.get('releaseDateChecked') else 0,
+            1 if movie.get('rating_checked') or movie.get('ratingChecked') else 0,
         ))
     
     conn.commit()
     conn.close()
+
+def upsert_movie(movie):
+    """Persist one scanned item without replacing the rest of the library."""
+    if not isinstance(movie, dict) or not str(movie.get('id') or '').strip():
+        raise ValueError('Movie id is required')
+    save_library([movie], replace=False)
+
+
+def remove_source_movies_not_in(source_id, movie_ids):
+    """Remove stale entries for one source after a complete scan."""
+    source_id = str(source_id or '').strip()
+    if not source_id:
+        return
+
+    ids = [str(movie_id).strip() for movie_id in movie_ids if str(movie_id).strip()]
+    conn = sqlite3.connect(DB_PATH, timeout=10)
+    cursor = conn.cursor()
+    if ids:
+        placeholders = ', '.join('?' for _ in ids)
+        cursor.execute(
+            f'DELETE FROM movies WHERE source_id = ? AND id NOT IN ({placeholders})',
+            [source_id, *ids],
+        )
+    else:
+        cursor.execute('DELETE FROM movies WHERE source_id = ?', (source_id,))
+    conn.commit()
+    conn.close()
+
+
+def remove_source_movies_outside_paths(source_id, selected_paths):
+    """Remove records from one source that fall outside its saved scan roots."""
+    source_id = str(source_id or '').strip()
+    roots = _normalized_scan_roots(selected_paths)
+    if not source_id or not roots:
+        return 0
+
+    conn = sqlite3.connect(DB_PATH, timeout=10)
+    cursor = conn.cursor()
+    rows = cursor.execute(
+        'SELECT id, file_path, files FROM movies WHERE source_id = ?',
+        (source_id,),
+    ).fetchall()
+    stale_ids = []
+    for movie_id, file_path, files_json in rows:
+        paths = [file_path]
+        try:
+            files = json.loads(files_json) if files_json else []
+        except (TypeError, json.JSONDecodeError):
+            files = []
+        if isinstance(files, list):
+            paths.extend(files)
+        usable_paths = [str(path or '').strip() for path in paths if str(path or '').strip()]
+        if usable_paths and not any(_is_path_within_root(path, root) for path in usable_paths for root in roots):
+            stale_ids.append(str(movie_id))
+
+    if stale_ids:
+        placeholders = ', '.join('?' for _ in stale_ids)
+        cursor.execute(f'DELETE FROM movies WHERE id IN ({placeholders})', stale_ids)
+        conn.commit()
+    conn.close()
+    return len(stale_ids)
+
+
+def _normalized_scan_roots(values):
+    if isinstance(values, str):
+        values = [part.strip() for part in values.split(',') if part.strip()]
+    if not isinstance(values, (list, tuple, set)):
+        return []
+
+    roots = []
+    for value in values:
+        root = str(value or '').strip().replace('\\', '/').rstrip('/')
+        if not root:
+            continue
+        roots.append(root.casefold())
+    return list(dict.fromkeys(roots))
+
+
+def _is_path_within_root(path, root):
+    candidate = str(path or '').strip().replace('\\', '/').rstrip('/').casefold()
+    if not candidate:
+        return False
+    if root == '/':
+        return candidate.startswith('/')
+    return candidate == root or candidate.startswith(root + '/')
+
 
 def load_library():
     """从数据库加载电影库"""
@@ -312,7 +415,12 @@ def load_library():
             'display_title': row[47] if len(row) > 47 else '',
             'is_favorite': bool(row[48]) if len(row) > 48 else False,
             'metadata_locked': bool(row[49]) if len(row) > 49 else False,
-            'added_at': row[50] if len(row) > 50 else ''
+            'added_at': row[50] if len(row) > 50 else '',
+            'chapter_name': row[51] if len(row) > 51 else '',
+            'home_display': bool(row[52]) if len(row) > 52 else False,
+            'release_date': row[53] if len(row) > 53 else '',
+            'release_date_checked': bool(row[54]) if len(row) > 54 else False,
+            'rating_checked': bool(row[55]) if len(row) > 55 else False,
         }
         movies.append(movie)
     
@@ -379,7 +487,12 @@ def get_movie_by_id(movie_id):
             'display_title': row[47] if len(row) > 47 else '',
             'is_favorite': bool(row[48]) if len(row) > 48 else False,
             'metadata_locked': bool(row[49]) if len(row) > 49 else False,
-            'added_at': row[50] if len(row) > 50 else ''
+            'added_at': row[50] if len(row) > 50 else '',
+            'chapter_name': row[51] if len(row) > 51 else '',
+            'home_display': bool(row[52]) if len(row) > 52 else False,
+            'release_date': row[53] if len(row) > 53 else '',
+            'release_date_checked': bool(row[54]) if len(row) > 54 else False,
+            'rating_checked': bool(row[55]) if len(row) > 55 else False,
         }
     else:
         movie = None

@@ -9,10 +9,36 @@
         <n-icon><Search /></n-icon>
         <input v-model.trim="keyword" type="search" placeholder="搜索电影、导演、演员..." />
       </div>
-      <button class="filter-button" type="button">
-        <n-icon><FunnelOutline /></n-icon>
-        筛选
-      </button>
+      <div ref="sortControlRef" class="sort-control">
+        <button
+          class="filter-button"
+          :class="{ active: sortMode !== 'title-asc' }"
+          type="button"
+          :aria-expanded="sortMenuOpen"
+          aria-haspopup="menu"
+          @click="sortMenuOpen = !sortMenuOpen"
+        >
+          <n-icon><FunnelOutline /></n-icon>
+          {{ sortMode === 'title-asc' ? '筛选' : `排序：${activeSortOption.shortLabel}` }}
+        </button>
+
+        <div v-if="sortMenuOpen" class="sort-menu" role="menu" aria-label="影视库排序">
+          <div class="sort-menu-heading">排序方式</div>
+          <button
+            v-for="option in sortOptions"
+            :key="option.value"
+            class="sort-option"
+            :class="{ active: sortMode === option.value }"
+            type="button"
+            role="menuitemradio"
+            :aria-checked="sortMode === option.value"
+            @click="selectSort(option.value)"
+          >
+            <span>{{ option.label }}</span>
+            <small>{{ option.description }}</small>
+          </button>
+        </div>
+      </div>
     </section>
 
     <section v-if="currentCategory === 'online'" class="online-section">
@@ -52,7 +78,7 @@
 </template>
 
 <script setup>
-import { computed, nextTick, onActivated, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onActivated, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter, onBeforeRouteLeave } from 'vue-router'
 import {
   FunnelOutline,
@@ -63,8 +89,8 @@ import OnlineBrowser from '@/components/online/OnlineBrowser.vue'
 import { MOCK_DATA } from '@/api/mockData'
 import { startPlay } from '@/composables/usePlayer'
 import { addFavorite, getHistory, getHomeData, removeFavorite } from '@/api/movie'
-import { saveScrollPosition, scheduleScrollRestore } from '@/utils/scrollRestoration'
-import { consumeScanCompleted } from '@/composables/useScanToast'
+import { saveScrollPosition, scheduleScrollRestore, trackScrollPosition } from '@/utils/scrollRestoration'
+import { consumeScanCompleted, consumeScanItemsPublished } from '@/composables/useScanToast'
 import { isTestMode } from '@/utils/runtime'
 
 defineOptions({ name: 'Home' })
@@ -72,9 +98,39 @@ defineOptions({ name: 'Home' })
 const route = useRoute()
 const router = useRouter()
 
+const HOME_SORT_MODE_STORAGE_KEY = 'moviepop:home-sort-mode'
+const SORT_MODE_VALUES = new Set([
+  'title-asc',
+  'title-desc',
+  'year-desc',
+  'year-asc',
+  'rating-desc',
+  'rating-asc'
+])
+
+function readStoredSortMode() {
+  try {
+    const value = window.localStorage.getItem(HOME_SORT_MODE_STORAGE_KEY)
+    return SORT_MODE_VALUES.has(value) ? value : 'title-asc'
+  } catch {
+    return 'title-asc'
+  }
+}
+
+function persistSortMode(value) {
+  try {
+    window.localStorage.setItem(HOME_SORT_MODE_STORAGE_KEY, value)
+  } catch {
+    // Storage can be unavailable in private or restricted browser contexts.
+  }
+}
+
 const loading = ref(false)
 const loadError = ref('')
 const keyword = ref('')
+const sortMenuOpen = ref(false)
+const sortMode = ref(readStoredSortMode())
+const sortControlRef = ref(null)
 const continueHistory = ref([])
 const homeData = ref({
   stats: { total: 0, remote: 0, local: 0, favorite: 0 },
@@ -111,6 +167,17 @@ const sourceTypeLabels = {
 
 const currentCategory = computed(() => route.query.category || 'all')
 const currentCategoryLabel = computed(() => categoryLabels[currentCategory.value] || '全部')
+const sortOptions = [
+  { value: 'title-asc', label: '名称：A 到 Z', shortLabel: '名称', description: '按影视名称升序排列' },
+  { value: 'title-desc', label: '名称：Z 到 A', shortLabel: '名称倒序', description: '按影视名称降序排列' },
+  { value: 'year-desc', label: '年份：由新到旧', shortLabel: '年份', description: '优先展示上映年份较新的影视' },
+  { value: 'year-asc', label: '年份：由旧到新', shortLabel: '年份倒序', description: '优先展示上映年份较早的影视' },
+  { value: 'rating-desc', label: '评分：由高到低', shortLabel: '评分', description: '优先展示高评分影视' },
+  { value: 'rating-asc', label: '评分：由低到高', shortLabel: '评分倒序', description: '优先展示低评分影视' }
+]
+const activeSortOption = computed(() =>
+  sortOptions.find(option => option.value === sortMode.value) || sortOptions[0]
+)
 
 const heroItems = computed(() =>
   homeData.value.hero
@@ -137,7 +204,7 @@ const rawVisibleItems = computed(() => {
   })
 })
 
-const visibleCards = computed(() => rawVisibleItems.value.map((item, index) => normalizeMovieCard(item, index)))
+const visibleCards = computed(() => sortHomeItems(rawVisibleItems.value).map((item, index) => normalizeMovieCard(item, index)))
 const continueCards = computed(() =>
   continueHistory.value
     .slice(0, 6)
@@ -148,7 +215,38 @@ function currentScrollKey() {
   return `scroll:${route.fullPath}`
 }
 
+function selectSort(value) {
+  sortMode.value = SORT_MODE_VALUES.has(value) ? value : 'title-asc'
+  sortMenuOpen.value = false
+}
+
+function sortHomeItems(items) {
+  const collator = new Intl.Collator('zh-CN', { numeric: true, sensitivity: 'base' })
+  const getYear = item => Number(String(item.year || '').match(/\d{4}/)?.[0] || 0)
+  const getRating = item => Number(item.rating ?? item.score ?? 0) || 0
+  const compareTitle = (left, right) => collator.compare(left.title || '', right.title || '')
+  const tieBreak = (left, right) => compareTitle(left, right) || String(left.id || '').localeCompare(String(right.id || ''))
+  const compareMetric = (left, right, getter, direction) => {
+    const leftValue = getter(left)
+    const rightValue = getter(right)
+    if (!leftValue && rightValue) return 1
+    if (leftValue && !rightValue) return -1
+    return direction * (leftValue - rightValue) || tieBreak(left, right)
+  }
+  const mode = sortMode.value
+
+  return [...items].sort((left, right) => {
+    if (mode === 'title-desc') return compareTitle(right, left) || tieBreak(left, right)
+    if (mode === 'year-desc') return compareMetric(left, right, getYear, -1)
+    if (mode === 'year-asc') return compareMetric(left, right, getYear, 1)
+    if (mode === 'rating-desc') return compareMetric(left, right, getRating, -1)
+    if (mode === 'rating-asc') return compareMetric(left, right, getRating, 1)
+    return tieBreak(left, right)
+  })
+}
+
 let abortController = null
+let stopScrollTracking = () => {}
 
 async function fetchHomeData() {
   if (abortController) abortController.abort()
@@ -278,7 +376,7 @@ function normalizeHeroItem(item) {
   return {
     id: item.id,
     title: stripSeasonSuffix(item.title) || '未命名影视',
-    year: item.year || '',
+    year: item.releaseDate || item.year || '',
     rating: Number(item.rating || item.score) > 0 ? Number(item.rating || item.score) : '',
     description: item.description || item.overview || '',
     backdrop: item.backdropUrl || item.coverUrl || item.posterUrl || '',
@@ -286,7 +384,7 @@ function normalizeHeroItem(item) {
     isResume: Boolean(item.isResume),
     tags: Array.isArray(item.tags) && item.tags.length
       ? item.tags
-      : [categoryLabel, item.year, sourceName, item.durationText].filter(Boolean)
+      : [categoryLabel, item.releaseDate || item.year, sourceName, item.durationText].filter(Boolean)
   }
 }
 
@@ -296,7 +394,7 @@ function normalizeMovieCard(item, index = 0) {
     category: item.category,
     title: stripSeasonSuffix(item.title) || '未命名影视',
     type: categoryLabels[item.category] || item.category || '影视',
-    year: item.year || '',
+    year: item.releaseDate || item.year || '',
     source: item.sourceName || sourceTypeLabels[item.sourceType] || item.sourceType || '未知',
     continueContext: item.continueContext || '',
     cardKey: item.continueCardKey || `${item.id || item.filePath || item.title || 'media'}:${item.lastPlayTime || index}`,
@@ -309,13 +407,16 @@ function normalizeMovieCard(item, index = 0) {
 onMounted(() => {
   refreshHomeData({ force: true })
   scheduleScrollRestore(currentScrollKey())
+  stopScrollTracking = trackScrollPosition(currentScrollKey())
 
-  window.addEventListener('scan:completed', handleScanCompleted)
-  window.addEventListener('focus', handleWindowFocus)
-  document.addEventListener('visibilitychange', handleVisibilityChange)
+  attachHomeListeners()
 })
 
 function handleScanCompleted() {
+  refreshHomeData({ force: true })
+}
+
+function handleScanItemsPublished() {
   refreshHomeData({ force: true })
 }
 
@@ -329,12 +430,37 @@ function handleVisibilityChange() {
   }
 }
 
+function handleDocumentPointerDown(event) {
+  if (sortControlRef.value && !sortControlRef.value.contains(event.target)) {
+    sortMenuOpen.value = false
+  }
+}
+
+function attachHomeListeners() {
+  window.addEventListener('scan:completed', handleScanCompleted)
+  window.addEventListener('scan:items-published', handleScanItemsPublished)
+  window.addEventListener('focus', handleWindowFocus)
+  document.addEventListener('visibilitychange', handleVisibilityChange)
+  document.addEventListener('pointerdown', handleDocumentPointerDown)
+}
+
+function detachHomeListeners() {
+  window.removeEventListener('scan:completed', handleScanCompleted)
+  window.removeEventListener('scan:items-published', handleScanItemsPublished)
+  window.removeEventListener('focus', handleWindowFocus)
+  document.removeEventListener('visibilitychange', handleVisibilityChange)
+  document.removeEventListener('pointerdown', handleDocumentPointerDown)
+}
+
 onActivated(async () => {
+  attachHomeListeners()
   await nextTick()
   scheduleScrollRestore(currentScrollKey())
 
   // 如果扫描在其它页面已完成，激活时刷新数据
-  if (consumeScanCompleted()) {
+  const scanCompleted = consumeScanCompleted()
+  const itemsPublished = consumeScanItemsPublished()
+  if (scanCompleted || itemsPublished) {
     await refreshHomeData({ force: true })
   } else {
     await refreshHomeData()
@@ -344,12 +470,17 @@ onActivated(async () => {
 })
 
 watch(currentCategory, () => refreshHomeData({ force: true }))
+watch(sortMode, persistSortMode)
 
 onBeforeRouteLeave(() => {
   saveScrollPosition(currentScrollKey())
-  window.removeEventListener('scan:completed', handleScanCompleted)
-  window.removeEventListener('focus', handleWindowFocus)
-  document.removeEventListener('visibilitychange', handleVisibilityChange)
+  stopScrollTracking()
+  detachHomeListeners()
+})
+
+onUnmounted(() => {
+  stopScrollTracking()
+  detachHomeListeners()
 })
 </script>
 
@@ -426,6 +557,64 @@ onBeforeRouteLeave(() => {
 .filter-button:hover {
   border-color: rgba(102, 126, 234, 0.46);
   color: #5bc4f7;
+}
+
+.filter-button.active {
+  border-color: rgba(102, 126, 234, 0.56);
+  color: #b9c7ff;
+  background: rgba(102, 126, 234, 0.16);
+}
+
+.sort-control {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.sort-menu {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 10px);
+  right: 0;
+  width: 246px;
+  padding: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 12px;
+  background: rgba(11, 14, 16, 0.96);
+  box-shadow: 0 20px 48px rgba(0, 0, 0, 0.42);
+  backdrop-filter: blur(18px);
+}
+
+.sort-menu-heading {
+  padding: 8px 10px 6px;
+  color: rgba(248, 243, 233, 0.52);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.sort-option {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  padding: 10px;
+  border: 0;
+  border-radius: 8px;
+  color: rgba(248, 243, 233, 0.84);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sort-option:hover,
+.sort-option.active {
+  color: #fff;
+  background: rgba(102, 126, 234, 0.18);
+}
+
+.sort-option small {
+  margin-top: 3px;
+  color: rgba(248, 243, 233, 0.46);
+  font-size: 11px;
 }
 
 .category-bar {

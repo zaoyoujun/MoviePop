@@ -605,6 +605,51 @@ def _normalize_season_label(season: int | None, season_title: str, part: int | N
     return season, value, part
 
 
+def _separate_chapter_from_season_title(
+    season_title: str,
+    chapter_name: str,
+    part: int | None,
+    version_title: str,
+) -> str:
+    """Keep a chapter/edition directory off the primary season axis.
+
+    A common layout is ``Season 03/袭击篇 #1``.  The folder used to become
+    ``season_title``, which made a chapter look like the name of a season in
+    the detail UI.  Known official season subtitles (for example ``NEW
+    WORLD``) are normalized earlier and deliberately remain season titles.
+    """
+    value = str(season_title or "").strip()
+    chapter = str(chapter_name or "").strip()
+    version = str(version_title or "").strip()
+    if not value:
+        return value
+
+    # A media edition is an independent version, never a season subtitle.
+    if version and _same_title_key(value, version):
+        return ""
+
+    # ``Part 1`` / ``Part1`` is a chapter marker for the selected season.
+    if part and re.fullmatch(rf"part\s*{int(part)}", value, re.IGNORECASE):
+        return ""
+
+    if not chapter:
+        return value
+
+    # Preserve known official subtitles such as "NEW WORLD", even when the
+    # release folder is also a numbered chapter ("NEW WORLD #1").
+    _, known_title = _matches_known_season_title(value)
+    if known_title:
+        return value
+
+    value_key = re.sub(r"[^\w\u4e00-\u9fff]", "", _clean_text(value)).lower()
+    chapter_key = re.sub(r"[^\w\u4e00-\u9fff]", "", _clean_text(chapter)).lower()
+    if part and value_key == f"{chapter_key}{int(part)}":
+        return ""
+    if value_key == chapter_key:
+        return ""
+    return value
+
+
 def _edition_label_from_path(folder_parts: list[str], title: str) -> str:
     category_index = _category_folder_index(folder_parts)
     if category_index is None:
@@ -1366,6 +1411,12 @@ def parse_video_filename(file_path: str) -> dict:
     season_title = season_title or season_label
     season, season_title, part = _normalize_season_label(season, season_title, part)
     main_title, season, season_title, part = _normalize_known_season_title(main_title, season, season_title, part)
+    season_title = _separate_chapter_from_season_title(
+        season_title,
+        chapter_name,
+        part,
+        version_title,
+    )
     season_title = _dedupe_season_title(main_title, season_title)
     display_suffix = _season_display(season, season_title, special_type, part, hide_special=hide_special_suffix)
     if display_suffix and str(display_suffix).startswith("（"):

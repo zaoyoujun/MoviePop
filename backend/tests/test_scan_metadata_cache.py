@@ -36,6 +36,8 @@ def _media_item(item_id="example-show-s1", episodes=None, **overrides):
         "backdrop_url": "",
         "intro": "",
         "tags": [],
+        "release_date_checked": True,
+        "rating_checked": True,
     }
     item.update(overrides)
     return item
@@ -52,7 +54,7 @@ def _clear_scan_state():
 
 def _configure_scan(monkeypatch, previous_library, scanned_items):
     source = {"id": SOURCE_ID, "name": "Test source", "type": "local"}
-    saved = {}
+    saved = {"movies": list(previous_library), "published": []}
 
     monkeypatch.setattr(scan_service.source_service, "load_sources", lambda: [source])
     monkeypatch.setattr(scan_service.source_service, "save_sources", lambda sources: None)
@@ -63,10 +65,28 @@ def _configure_scan(monkeypatch, previous_library, scanned_items):
     monkeypatch.setattr(scan_service, "_update_source_after_scan", lambda *args, **kwargs: None)
     monkeypatch.setattr(scan_service.library_service, "load_library", lambda: list(previous_library))
     monkeypatch.setattr(scan_service.library_service, "compute_stats", lambda movies: {})
+    def upsert_movie(movie):
+        item = dict(movie)
+        saved["published"].append(item)
+        for index, existing in enumerate(saved["movies"]):
+            if existing.get("id") == item.get("id"):
+                saved["movies"][index] = item
+                break
+        else:
+            saved["movies"].append(item)
+
+    def remove_source_movies_not_in(source_id, movie_ids):
+        keep_ids = set(movie_ids)
+        saved["movies"][:] = [
+            item for item in saved["movies"]
+            if item.get("source_id") != source_id or item.get("id") in keep_ids
+        ]
+
+    monkeypatch.setattr(scan_service.library_service, "upsert_movie", upsert_movie)
     monkeypatch.setattr(
         scan_service.library_service,
-        "save_library",
-        lambda movies: saved.setdefault("movies", list(movies)),
+        "remove_source_movies_not_in",
+        remove_source_movies_not_in,
     )
     return saved
 
@@ -81,6 +101,7 @@ def test_rescan_reuses_metadata_and_updates_new_episodes(monkeypatch):
         intro="Existing metadata",
         tmdb_id="123",
         metadata_source="tmdb",
+        release_date="2024-04-03",
         playback={"current_episode": 2},
         is_favorite=True,
     )
@@ -102,6 +123,8 @@ def test_rescan_reuses_metadata_and_updates_new_episodes(monkeypatch):
     assert saved_item["cover_url"] == "/covers/example.webp"
     assert saved_item["intro"] == "Existing metadata"
     assert saved_item["tmdb_id"] == "123"
+    assert saved_item["release_date"] == "2024-04-03"
+    assert saved_item["release_date_checked"] is True
     assert saved_item["playback"] == {"current_episode": 2}
     assert saved_item["is_favorite"] is True
 
@@ -121,7 +144,7 @@ def test_rescan_scrapes_entries_without_successful_metadata(monkeypatch):
 
     monkeypatch.setattr(scan_service, "_create_scraper", lambda: scraper)
 
-    def fake_scrape(source_id, movies, scraper=None):
+    def fake_scrape(source_id, movies, scraper=None, **kwargs):
         calls.append((source_id, scraper, movies[0]["id"]))
         movies[0]["metadata_title"] = "Example Show"
         movies[0]["cover_url"] = "/covers/example.webp"
@@ -134,6 +157,67 @@ def test_rescan_scrapes_entries_without_successful_metadata(monkeypatch):
     assert saved["movies"][0]["cover_url"] == "/covers/example.webp"
     status = scan_service.get_status(SOURCE_ID)
     assert status["metadataReused"] == 0
+    assert status["metadataScraped"] == 1
+
+
+def test_scrape_progress_keeps_the_outer_media_index():
+    movie = _media_item(episodes=[1])
+    provider_updates = []
+
+    class Scraper:
+        def scrape(self, *args, progress_callback=None, **kwargs):
+            progress_callback("tmdb")
+            provider_updates.append("tmdb")
+            return {"title": "Example Show", "cover_url": "/covers/example.webp"}
+
+    scan_service._scrape_metadata(
+        SOURCE_ID,
+        [movie],
+        scraper=Scraper(),
+        progress_index=7,
+        progress_total=71,
+    )
+
+    status = scan_service.get_status(SOURCE_ID)
+    assert provider_updates == ["tmdb"]
+    assert status["processed"] == 7
+    assert status["total"] == 71
+    assert status["activity"] == "正在保存元数据"
+
+
+def test_rescan_refreshes_pre_date_metadata_once(monkeypatch):
+    previous = _media_item(
+        episodes=[1],
+        source_id=SOURCE_ID,
+        metadata_title="Example Show",
+        cover_url="/covers/old.webp",
+        release_date_checked=False,
+        rating_checked=False,
+    )
+    scanned = _media_item(episodes=[1])
+    saved = _configure_scan(monkeypatch, [previous], [scanned])
+
+    class Scraper:
+        def scrape(self, *args, **kwargs):
+            return {
+                "title": "Example Show",
+                "cover_url": "/covers/example.webp",
+                "release_date": "2024-04-03",
+                "year": 2024,
+                "score": 8.6,
+            }
+
+    monkeypatch.setattr(scan_service, "_create_scraper", Scraper)
+
+    scan_service._scan_source(SOURCE_ID)
+
+    saved_item = saved["movies"][0]
+    assert saved_item["release_date"] == "2024-04-03"
+    assert saved_item["release_date_checked"] is True
+    assert saved_item["rating"] == 8.6
+    assert saved_item["rating_checked"] is True
+    status = scan_service.get_status(SOURCE_ID)
+    assert status["metadataReused"] == 1
     assert status["metadataScraped"] == 1
 
 
@@ -180,7 +264,7 @@ def test_same_id_from_another_source_is_not_reused(monkeypatch):
     monkeypatch.setattr(
         scan_service,
         "_scrape_metadata",
-        lambda source_id, movies, scraper=None: calls.append((source_id, scraper)),
+        lambda source_id, movies, scraper=None, **kwargs: calls.append((source_id, scraper)),
     )
 
     scan_service._scan_source(SOURCE_ID)
@@ -273,3 +357,27 @@ def test_cached_multiseason_scan_stays_grouped_and_switchable(monkeypatch):
     monkeypatch.setattr(library_service, "load_library", lambda: saved_items)
     detail = library_service.movie_to_detail(saved_items[0])
     assert [season["seasonNumber"] for season in detail["seasons"]] == [1, 2]
+
+
+def test_scan_publishes_a_completed_item_before_the_next_scrape(monkeypatch):
+    scanned = [
+        _media_item("first-movie", episodes=[1]),
+        _media_item("second-movie", episodes=[1]),
+    ]
+    saved = _configure_scan(monkeypatch, [], scanned)
+    observed_published_ids = []
+
+    def fake_scrape(_source_id, movies, scraper=None, **_kwargs):
+        movie = movies[0]
+        if movie["id"] == "second-movie":
+            observed_published_ids.extend(item["id"] for item in saved["published"])
+        movie["cover_url"] = f"/covers/{movie['id']}.webp"
+
+    monkeypatch.setattr(scan_service, "_create_scraper", lambda: object())
+    monkeypatch.setattr(scan_service, "_scrape_metadata", fake_scrape)
+
+    scan_service._scan_source(SOURCE_ID)
+
+    assert observed_published_ids == ["first-movie"]
+    assert [item["id"] for item in saved["published"]] == ["first-movie", "second-movie"]
+    assert scan_service.get_status(SOURCE_ID)["itemsPublished"] == 2

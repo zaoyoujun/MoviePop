@@ -39,7 +39,7 @@
         </article>
 
         <div class="card-bottom" @click="handleCardClick(card)">
-          <strong>{{ card.title }}</strong>
+          <strong :title="card.title">{{ card.title }}</strong>
           <p
             v-if="showPlayback && card.continueContext"
             class="continue-context"
@@ -177,15 +177,14 @@ function getImageStyle(cardId) {
 
 function formatYear(year) {
   if (!year) return ''
-  const numYear = Number(year)
-  if (Number.isFinite(numYear)) {
-    return `${numYear}-1-1`
-  }
-  const date = new Date(year)
-  if (!isNaN(date.getTime())) {
-    return `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}`
-  }
-  return year
+  const value = String(year).trim()
+  if (/^\d{4}$/.test(value)) return value
+
+  const match = value.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/)
+  if (!match) return value
+
+  const [, parsedYear, month, day] = match
+  return `${parsedYear}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
 }
 </script>
 

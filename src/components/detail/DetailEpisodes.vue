@@ -103,7 +103,7 @@ const props = defineProps({
   }
 })
 
-const emit = defineEmits(['update:modelValue', 'play'])
+const emit = defineEmits(['update:modelValue', 'play', 'select-version'])
 
 const railRef = ref(null)
 const isPlaying = ref(false)
@@ -170,11 +170,13 @@ function selectSeason(seasonNumber) {
   let index = props.versions.findIndex(v => Number(v.seasonNumber || 1) === Number(seasonNumber))
   if (index >= 0) {
     currentVersion.value = index
+    emit('select-version', index)
   }
 }
 
 function selectVersion(index) {
   currentVersion.value = index
+  emit('select-version', index)
 }
 
 function chapterOptionLabel(item) {
@@ -184,6 +186,10 @@ function chapterOptionLabel(item) {
 
   if (part) {
     const label = `第 ${part} 篇`
+    const isGenericPartName = /^part\s*\d+$/i.test(chapterName)
+    if (chapterName && !isGenericPartName) {
+      return `${chapterName} · ${label}`
+    }
     return versionTitle && versionTitle !== chapterName ? `${label} · ${versionTitle}` : label
   }
   return versionTitle || chapterName || item.name || '默认版本'

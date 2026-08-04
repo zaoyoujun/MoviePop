@@ -1,6 +1,6 @@
 {
   "name": "MoviePop",
-  "version": "1.0.0",
+  "version": "1.0.4",
   "description": "MoviePop - A modern movie and anime library manager",
   "author": "MoviePop Team",
   "private": true,
@@ -52,7 +52,9 @@
     },
     "nsis": {
       "oneClick": false,
-      "allowToChangeInstallationDirectory": true
+      "allowToChangeInstallationDirectory": true,
+      "include": "build-res/nsis-installer.nsh",
+      "shortcutName": "爆米花"
     }
   },
   "dependencies": {

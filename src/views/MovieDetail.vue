@@ -96,6 +96,7 @@
             :seasons="detail.seasons"
             :fallback-image="activeHero.backdrop || activeHero.poster || heroImage"
             @play="handleVersionPlay"
+            @select-version="setHomePresentationForVersion"
           />
 
           <!-- 季选择与集数列表 -->
@@ -239,7 +240,7 @@ import DetailRecommend from '@/components/detail/DetailRecommend.vue'
 import Scrape from './Scrape.vue'
 
 import { startPlay } from '@/composables/usePlayer'
-import { addFavorite, getMovieDetail, getRecommendations, removeFavorite } from '@/api/movie'
+import { addFavorite, getMovieDetail, getRecommendations, removeFavorite, setHomePresentation } from '@/api/movie'
 import { apiUrl } from '@/api/request'
 import { isTestMode } from '@/utils/runtime'
 
@@ -252,6 +253,7 @@ const currentVersion = ref(0)
 const showTip = ref(false)
 const tipMessage = ref('')
 const isPlaying = ref(false)
+let lastHomePresentationId = ''
 const pageVisible = ref(false)
 const themePalette = ref({
   wash: 'rgba(99, 102, 241, 0.24)',
@@ -414,7 +416,7 @@ function normalizeRecommendItem(item) {
   return {
     id: item.id,
     title: item.title || '未命名',
-    year: item.year || '',
+    year: item.releaseDate || item.year || '',
     category: category === 'movie' && genres.length ? genres[0] : category,
     rating: item.score || item.rating || '',
     poster: item.coverUrl || item.posterUrl || item.poster || ''
@@ -514,7 +516,7 @@ function normalizeDetail(data) {
       displayTitle: entry.displayTitle || entry.title || entry.name || '',
       description: entry.description || '',
       score: entry.score || 0,
-      year: entry.year || '',
+      year: entry.releaseDate || entry.year || '',
       tags: entry.tags || [],
       coverUrl: entry.coverUrl || '',
       backdropUrl: entry.backdropUrl || entry.coverUrl || '',
@@ -536,7 +538,7 @@ function normalizeDetail(data) {
         displayTitle: season.displayTitle || season.title || season.name || '',
         description: season.description || '',
         score: season.score || 0,
-        year: season.year || '',
+        year: season.releaseDate || season.year || '',
         tags: season.tags || [],
         coverUrl: season.coverUrl || '',
         backdropUrl: season.backdropUrl || season.coverUrl || '',
@@ -586,7 +588,7 @@ function normalizeDetail(data) {
     title: data.title || '未命名影片',
     originalTitle: data.originalTitle || '',
     type: isSeries ? 'series' : 'movie',
-    year: data.year || '',
+    year: data.releaseDate || data.year || '',
     country: data.country || '',
     countries,
     duration: data.durationText || data.duration || '',
@@ -984,6 +986,23 @@ function doPlayMovie(d, versionIdx = currentVersion.value) {
     episodeList: [],
     seasonIndex: versionIdx
   })
+}
+
+async function setHomePresentationForVersion(versionIndex) {
+  if (isTestMode) return
+
+  const version = detail.value.versions?.[Number(versionIndex)]
+  const movieId = String(version?.movieId || '').trim()
+  if (!movieId || movieId === lastHomePresentationId) return
+
+  try {
+    await setHomePresentation(movieId)
+    lastHomePresentationId = movieId
+  } catch (error) {
+    // The active detail selection still works locally.  Only the optional
+    // persisted presentation preference failed to update.
+    console.warn('[MovieDetail] 更新首页展示版本失败:', error)
+  }
 }
 
 function doPlayEpisode(ep, versionIdx) {

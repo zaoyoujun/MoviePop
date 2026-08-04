@@ -402,6 +402,7 @@ async def update_source(source_id: str, request: Request):
 
         source_type = source_service.normalize_type(body.get("type") or source.get("type") or "")
         updated = _build_source_payload({**source, **body}, source_type, source_id=source_id, existing=source)
+        selected_paths_changed = _normalized_selected_paths(source.get("selected_paths")) != _normalized_selected_paths(updated.get("selected_paths"))
 
         # mount_path 是 OpenList 的挂载点概念，WebDAV 与本地源不要求它。
         # 之前在所有类型更新时都做严格校验，导致 WebDAV 选择目录后无法保存。
@@ -417,12 +418,23 @@ async def update_source(source_id: str, request: Request):
                 break
         source_service.save_sources(sources)
 
+        removed_out_of_scope = 0
+        if selected_paths_changed:
+            removed_out_of_scope = lib.remove_source_movies_outside_paths(
+                source_id,
+                updated.get("selected_paths") or [],
+            )
+
         if source_type == "openlist" and mount_changed:
             _delete_openlist_storage_for_source(source)
             _create_openlist_storage_for_source(updated)
 
         scan_status = _maybe_start_scan(updated, body)
-        return api_response(data={"source": source_service.safe_source(updated), "scanStatus": scan_status})
+        return api_response(data={
+            "source": source_service.safe_source(updated),
+            "scanStatus": scan_status,
+            "removedOutOfScope": removed_out_of_scope,
+        })
     except Exception as exc:
         logger.exception("Update source failed")
         return api_response(code=500, message=str(exc))
@@ -873,6 +885,14 @@ async def add_favorite(movie_id: str):
 @router.delete("/api/movies/{movie_id}/favorite")
 async def remove_favorite(movie_id: str):
     return _set_favorite(movie_id, False)
+
+
+@router.post("/api/movies/{movie_id}/home-presentation")
+async def set_home_presentation(movie_id: str):
+    movie = lib.set_home_presentation(movie_id)
+    if not movie:
+        return api_response(code=404, message="Movie not found")
+    return api_response(data=lib.movie_to_api_format(movie))
 
 
 @router.post("/api/movies/{movie_id}/playback")
@@ -1628,13 +1648,15 @@ def _manual_search_anibk(keyword: str) -> list[dict[str, Any]]:
         detail_url = candidate.get("url", "")
         cover_url = scraper._get_anibk_cover(detail_url) if detail_url else ""
         description = scraper._get_anibk_intro(detail_url) if detail_url else ""
-        year = scraper._get_anibk_year(detail_url) if detail_url else 0
+        release_info = scraper._get_anibk_release_info(detail_url) if detail_url else {}
+        year = release_info.get("year", 0)
         results.append({
             "title": candidate.get("title", ""),
             "source": "anibk",
             "sourceId": detail_url,
             "url": detail_url,
             "year": year,
+            "releaseDate": release_info.get("release_date", ""),
             "genres": ["anime"],
             "country": "JP",
             "score": 0,
@@ -1667,7 +1689,8 @@ def _manual_search_tmdb(keyword: str) -> list[dict[str, Any]]:
         if media_type not in {"movie", "tv"}:
             continue
         title = item.get("title") or item.get("name") or item.get("original_title") or item.get("original_name") or ""
-        year = _extract_year_from_text(item.get("release_date") or item.get("first_air_date") or "")
+        raw_release_date = item.get("release_date") or item.get("first_air_date") or ""
+        year = _extract_year_from_text(raw_release_date)
         poster = scraper._tmdb_image_url(item.get("poster_path") or "", "poster")
         backdrop = scraper._tmdb_image_url(item.get("backdrop_path") or "", "backdrop")
         items.append({
@@ -1677,6 +1700,7 @@ def _manual_search_tmdb(keyword: str) -> list[dict[str, Any]]:
             "tmdbId": item.get("id"),
             "tmdbMediaType": media_type,
             "year": year,
+            "releaseDate": scraper._normalize_release_date(raw_release_date),
             "genres": [],
             "country": "",
             "score": round(float(item.get("vote_average") or 0), 1),
@@ -1733,6 +1757,7 @@ def _manual_douban_payload(result: dict[str, Any], keyword: str) -> dict[str, An
         "sourceId": result.get("douban_url", ""),
         "url": result.get("douban_url", ""),
         "year": result.get("year", 0),
+        "releaseDate": result.get("release_date", ""),
         "genres": result.get("genres") or result.get("tags") or [],
         "country": " / ".join(result.get("countries") or []),
         "score": result.get("score", 0),
@@ -1812,13 +1837,21 @@ def _apply_manual_scrape_metadata(
             if clear_empty:
                 movie["year"] = None
 
+    if apply_text and ("releaseDate" in metadata or "release_date" in metadata):
+        release_date = scraper._normalize_release_date(_metadata_text(metadata, "releaseDate", "release_date"))
+        if release_date or clear_empty:
+            movie["release_date"] = release_date
+            movie["release_date_checked"] = True
+
     if apply_text and ("score" in metadata or "rating" in metadata):
         score = metadata.get("score") if "score" in metadata else metadata.get("rating")
         try:
             movie["rating"] = float(score or 0)
+            movie["rating_checked"] = True
         except (TypeError, ValueError):
             if clear_empty:
                 movie["rating"] = 0
+                movie["rating_checked"] = True
 
     cover_url = str(metadata.get("coverUrl") or metadata.get("posterUrl") or metadata.get("poster") or "").strip()
     backdrop_url = str(metadata.get("backdropUrl") or metadata.get("backdrop") or "").strip()
@@ -2213,6 +2246,16 @@ def _maybe_start_scan(source: dict[str, Any], body: dict[str, Any]) -> dict[str,
     if not _coerce_bool(body.get("auto_scan", body.get("autoScan", True))):
         return scan_service.get_status(source["id"])
     return scan_service.start_background_scan(source["id"])
+
+
+def _normalized_selected_paths(values: Any) -> tuple[str, ...]:
+    paths = _coerce_path_list(values)
+    normalized = {
+        ("/" if str(path or "").strip() == "/" else str(path or "").strip().replace("\\", "/").rstrip("/")).casefold()
+        for path in paths
+        if str(path or "").strip()
+    }
+    return tuple(sorted(normalized))
 
 
 def _build_webdav_base_url(data: dict[str, Any]) -> str:

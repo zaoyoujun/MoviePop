@@ -22,7 +22,7 @@
             <strong v-if="item.rating">{{ item.rating }}</strong>
             <span v-if="item.year">{{ item.year }}</span>
           </div>
-          <p>{{ item.description || '从你的私人片库中挑选一部，继续今晚的放映。' }}</p>
+          <p class="hero-description">{{ item.description || '从你的私人片库中挑选一部，继续今晚的放映。' }}</p>
           <div class="tag-row">
             <span v-for="tag in item.tags" :key="tag">{{ tag }}</span>
           </div>
@@ -145,9 +145,12 @@ defineEmits(['play', 'detail'])
 .hero-copy {
   position: absolute;
   z-index: 3;
-  top: 42px;
+  top: 32px;
+  bottom: 30px;
   left: clamp(24px, 3.8vw, 58px);
   max-width: min(660px, calc(100% - 56px));
+  display: flex;
+  flex-direction: column;
 }
 
 .hero-kicker {
@@ -183,22 +186,29 @@ defineEmits(['play', 'detail'])
   font-size: 16px;
 }
 
-.hero-copy p {
+.hero-description {
+  display: -webkit-box;
   max-width: 590px;
   margin: 10px 0 0;
+  overflow: hidden;
   color: rgba(248, 243, 233, 0.72);
   font-size: 15px;
   line-height: 1.55;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .tag-row {
   display: flex;
-  flex-wrap: wrap;
+  flex: 0 0 30px;
+  flex-wrap: nowrap;
   gap: 8px;
+  overflow: hidden;
   margin-top: 11px;
 }
 
 .tag-row span {
+  flex: 0 0 auto;
   padding: 6px 10px;
   border: 1px solid rgba(255, 255, 255, 0.14);
   border-radius: 999px;
@@ -210,9 +220,11 @@ defineEmits(['play', 'detail'])
 
 .hero-actions {
   display: flex;
+  flex: 0 0 auto;
   flex-wrap: wrap;
   gap: 12px;
-  margin-top: 13px;
+  margin-top: auto;
+  padding-top: 13px;
 }
 
 .primary-action,
@@ -257,11 +269,16 @@ defineEmits(['play', 'detail'])
   }
 
   .hero-copy {
-    top: 46px;
+    top: 40px;
+    bottom: 34px;
   }
 
   .title-row h1 {
     font-size: 40px;
+  }
+
+  .hero-description {
+    -webkit-line-clamp: 3;
   }
 }
 </style>

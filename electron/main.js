@@ -4,6 +4,11 @@ import { join, dirname } from 'path'
 import { spawn, spawnSync } from 'child_process'
 import { fileURLToPath } from 'url'
 import http from 'http'
+import {
+  migrateBackendDataWhenTargetMissing,
+  migrateLegacyBackendData,
+  migrateUserDataWhenTargetMissing,
+} from './dataMigration.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -12,6 +17,38 @@ let mainWindow
 let backendProcess
 
 const APP_ROOT = join(__dirname, '..')
+
+const getPortableDirectory = () => (
+  process.env.PORTABLE_EXECUTABLE_DIR ||
+  (process.env.PORTABLE_EXECUTABLE_FILE ? dirname(process.env.PORTABLE_EXECUTABLE_FILE) : '')
+)
+
+const getSiblingDataRoot = () => {
+  const portableDirectory = getPortableDirectory()
+  if (portableDirectory) return join(portableDirectory, 'MoviePopData')
+  return join(dirname(dirname(process.execPath)), 'MoviePopData')
+}
+
+const getManagedDataRoot = () => {
+  const portableDirectory = getPortableDirectory()
+  if (portableDirectory) return join(portableDirectory, 'MoviePopData')
+  return join(dirname(process.execPath), 'MoviePopData')
+}
+
+const getUpdateStagingRoot = () => {
+  const portableDirectory = getPortableDirectory()
+  if (portableDirectory) return ''
+  return join(dirname(dirname(process.execPath)), 'MoviePopData.migration')
+}
+
+const legacyUserDataDirectory = app.getPath('userData')
+const siblingDataRoot = app.isPackaged ? getSiblingDataRoot() : ''
+const managedDataRoot = app.isPackaged ? getManagedDataRoot() : ''
+const updateStagingRoot = app.isPackaged ? getUpdateStagingRoot() : ''
+
+if (managedDataRoot) {
+  app.setPath('userData', join(managedDataRoot, 'app'))
+}
 
 function isVideoUrl(url) {
   return url.includes('/v/') || 
@@ -57,17 +94,25 @@ const getBackendLaunch = () => {
 
 const getBackendDataDir = () => {
   if (app.isPackaged) {
-    const portableDir =
-      process.env.PORTABLE_EXECUTABLE_DIR ||
-      (process.env.PORTABLE_EXECUTABLE_FILE ? dirname(process.env.PORTABLE_EXECUTABLE_FILE) : '')
-
-    if (portableDir) {
-      return join(portableDir, 'MoviePopData', 'backend')
+    const userDataDirectory = join(managedDataRoot, 'backend')
+    if (updateStagingRoot) {
+      migrateLegacyBackendData({
+        legacyDirectory: join(updateStagingRoot, 'backend'),
+        targetDirectory: userDataDirectory,
+        backupRoot: join(managedDataRoot, 'migration-backups'),
+      })
     }
-
-    // 安装版与便携版都把数据放在可执行文件同级，便于用户把程序和资料
-    // 一起迁移到任意磁盘，而不是写入系统用户目录。
-    return join(dirname(process.execPath), 'MoviePopData', 'backend')
+    migrateBackendDataWhenTargetMissing({
+      sourceDirectory: join(siblingDataRoot, 'backend'),
+      targetDirectory: userDataDirectory,
+      backupRoot: join(managedDataRoot, 'migration-backups'),
+    })
+    migrateBackendDataWhenTargetMissing({
+      sourceDirectory: join(legacyUserDataDirectory, 'backend'),
+      targetDirectory: userDataDirectory,
+      backupRoot: join(managedDataRoot, 'migration-backups'),
+    })
+    return userDataDirectory
   }
 
   return join(APP_ROOT, 'MoviePopData', 'backend')
@@ -260,6 +305,23 @@ const createWindow = () => {
 }
 
 app.whenReady().then(async () => {
+  if (managedDataRoot) {
+    if (updateStagingRoot) {
+      migrateUserDataWhenTargetMissing({
+        sourceDirectory: join(updateStagingRoot, 'app'),
+        targetDirectory: app.getPath('userData'),
+      })
+    }
+    migrateUserDataWhenTargetMissing({
+      sourceDirectory: join(siblingDataRoot, 'app'),
+      targetDirectory: app.getPath('userData'),
+    })
+    migrateUserDataWhenTargetMissing({
+      sourceDirectory: legacyUserDataDirectory,
+      targetDirectory: app.getPath('userData'),
+    })
+  }
+
   Menu.setApplicationMenu(null)
   const backendStarted = startBackend()
   if (backendStarted) {

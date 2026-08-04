@@ -8,7 +8,7 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from core.filename_parser import parse_video_filename, merge_series_videos
-from services import library_service
+from services import db_service, library_service
 
 
 def test_technical_version_directory_keeps_title_and_variant_label():
@@ -109,6 +109,52 @@ def test_dr_stone_directory_layout_keeps_series_seasons_parts_versions_and_speci
     ]
     assert [item["special_type"] for item in parsed[-3:]] == ["OVA", "\u7279\u522b\u7bc7", "\u5267\u573a\u7248"]
     assert len(merge_series_videos(paths)) == 14
+
+
+def test_chapter_directories_do_not_become_season_titles():
+    root = "/media/\u52a8\u6f2b/Re \u4ece\u96f6\u5f00\u59cb\u7684\u5f02\u4e16\u754c\u751f\u6d3b"
+    paths = [
+        f"{root}/Season 03/\u88ad\u51fb\u7bc7 #1/Re\uff1a\u4ece\u96f6\u5f00\u59cb\u7684\u5f02\u4e16\u754c\u751f\u6d3b.S03E01.mkv",
+        f"{root}/Season 03/\u88ad\u51fb\u7bc7 #2/Re\uff1a\u4ece\u96f6\u5f00\u59cb\u7684\u5f02\u4e16\u754c\u751f\u6d3b.S03E09.mkv",
+        f"{root}/Season 04/\u4e27\u5931\u7bc7 #1/ReZero 4th Season [01].mkv",
+    ]
+
+    parsed = [parse_video_filename(path) for path in paths]
+
+    assert [(item["season"], item["season_title"], item["chapter_name"], item["part"]) for item in parsed] == [
+        (3, "", "\u88ad\u51fb\u7bc7", 1),
+        (3, "", "\u88ad\u51fb\u7bc7", 2),
+        (4, "", "\u4e27\u5931\u7bc7", 1),
+    ]
+    entries = merge_series_videos(paths)
+    assert [(item["season"], item["season_title"], item["chapter_name"], item["part"]) for item in entries] == [
+        (3, "", "\u88ad\u51fb\u7bc7", 1),
+        (3, "", "\u88ad\u51fb\u7bc7", 2),
+        (4, "", "\u4e27\u5931\u7bc7", 1),
+    ]
+
+
+def test_detail_uses_persisted_chapter_name_and_migrates_legacy_chapter_labels(monkeypatch):
+    library = [
+        {"id": "show-s3-part-1", "title": "Example Show", "series_title": "Example Show", "category": "\u7535\u89c6\u5267", "season": 3, "chapter_name": "\u88ad\u51fb\u7bc7", "part": 1, "episodes": [1], "files": ["s3e1"]},
+        {"id": "show-s3-part-2", "title": "Example Show", "series_title": "Example Show", "category": "\u7535\u89c6\u5267", "season": 3, "season_title": "\u88ad\u51fb\u7bc7 #2", "part": 2, "episodes": [2], "files": ["s3e2"]},
+    ]
+    monkeypatch.setattr(library_service, "load_library", lambda: library)
+
+    detail = library_service.movie_to_detail(library[0])
+
+    assert detail["seasons"][0]["seasonTitle"] == ""
+    assert [entry["chapterName"] for entry in detail["versions"][0]["seasons"]] == ["\u88ad\u51fb\u7bc7", "\u88ad\u51fb\u7bc7"]
+
+
+def test_chapter_name_round_trips_through_library_database(tmp_path, monkeypatch):
+    db_path = tmp_path / "library.db"
+    monkeypatch.setattr(db_service, "DB_PATH", str(db_path))
+    db_service.init_db()
+    db_service.save_library([{"id": "chapter-test", "title": "Example", "chapter_name": "\u88ad\u51fb\u7bc7"}])
+
+    assert db_service.load_library()[0]["chapter_name"] == "\u88ad\u51fb\u7bc7"
+    assert db_service.get_movie_by_id("chapter-test")["chapter_name"] == "\u88ad\u51fb\u7bc7"
 
 
 def run_case(name, file_path, expected):

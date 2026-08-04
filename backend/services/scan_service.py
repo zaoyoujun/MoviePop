@@ -35,7 +35,10 @@ LOCKED_METADATA_FIELDS = (
     "display_title",
     "intro",
     "year",
+    "release_date",
+    "release_date_checked",
     "rating",
+    "rating_checked",
     "cover_url",
     "backdrop_url",
     "tags",
@@ -61,7 +64,10 @@ SCRAPED_METADATA_FIELDS = (
     "display_title",
     "intro",
     "year",
+    "release_date",
+    "release_date_checked",
     "rating",
+    "rating_checked",
     "cover_url",
     "backdrop_url",
     "tags",
@@ -82,6 +88,7 @@ SCRAPED_METADATA_FIELDS = (
 PERSISTED_USER_STATE_FIELDS = (
     "is_favorite",
     "playback",
+    "home_display",
 )
 
 _METADATA_EVIDENCE_FIELDS = (
@@ -162,6 +169,7 @@ def get_status(source_id: str) -> dict[str, Any]:
         return dict(_statuses.get(source_id, {
             "scanning": False,
             "stage": "idle",
+            "activity": "",
             "current": "",
             "processed": 0,
             "total": 0,
@@ -169,6 +177,7 @@ def get_status(source_id: str) -> dict[str, Any]:
             "metadataReused": 0,
             "metadataScraped": 0,
             "episodesUpdated": 0,
+            "itemsPublished": 0,
         }))
 
 
@@ -190,6 +199,7 @@ def start_background_scan(source_id: str) -> dict[str, Any]:
         _statuses[source_id] = {
             "scanning": True,
             "stage": "queued",
+            "activity": "正在排队",
             "current": "",
             "processed": 0,
             "total": 0,
@@ -197,6 +207,7 @@ def start_background_scan(source_id: str) -> dict[str, Any]:
             "metadataReused": 0,
             "metadataScraped": 0,
             "episodesUpdated": 0,
+            "itemsPublished": 0,
             "startedAt": _now_iso(),
             "finishedAt": "",
         }
@@ -246,7 +257,11 @@ def _scan_source(source_id: str) -> None:
     if not source:
         raise ValueError("Data source not found")
 
-    _set_status(source_id, stage="scan", current=source.get("name", ""))
+    _set_status(source_id, stage="scan", activity="正在读取文件", current=source.get("name", ""))
+    library_service.remove_source_movies_outside_paths(
+        source_id,
+        _source_scan_roots(source),
+    )
     files = _collect_video_files(source)
     if _is_cancelled(source_id):
         _set_status(
@@ -261,7 +276,7 @@ def _scan_source(source_id: str) -> None:
         )
         return
 
-    _set_status(source_id, stage="parse", total=len(files), processed=0)
+    _set_status(source_id, stage="parse", activity="正在识别影视", total=len(files), processed=0)
 
     previous_library = library_service.load_library()
     previous_by_id = {
@@ -284,11 +299,14 @@ def _scan_source(source_id: str) -> None:
     metadata_reused = 0
     metadata_scraped = 0
     episodes_updated = 0
+    items_published = 0
     for index, movie in enumerate(movies, start=1):
         if _is_cancelled(source_id):
             break
         _set_status(
             source_id,
+            stage="parse",
+            activity="正在整理影视",
             current=movie.get("title", ""),
             processed=index,
             total=len(movies),
@@ -324,6 +342,8 @@ def _scan_source(source_id: str) -> None:
             item["added_at"] = item["updated_at"]
 
         metadata_reused_for_item = False
+        metadata_needs_date_refresh = False
+        metadata_needs_rating_refresh = False
         if previous_item:
             _copy_persisted_user_state(item, previous_item)
             if _episode_signature(item) != _episode_signature(previous_item):
@@ -334,6 +354,8 @@ def _scan_source(source_id: str) -> None:
             elif _has_reusable_metadata(previous_item):
                 _copy_scraped_metadata(item, previous_item)
                 metadata_reused_for_item = True
+                metadata_needs_date_refresh = not previous_item.get("release_date_checked")
+                metadata_needs_rating_refresh = not previous_item.get("rating_checked")
 
         if metadata_reused_for_item:
             metadata_reused += 1
@@ -341,21 +363,35 @@ def _scan_source(source_id: str) -> None:
         if index == 1:
             logger.info("-" * 48)
         _log_detected_movie(item)
-        # New/failed entries are scraped lazily.  If every item can reuse
-        # cached metadata, no scraper session is created at all.
-        if auto_scrape and not metadata_reused_for_item:
+        # New/failed entries are scraped lazily. Libraries created before
+        # complete release dates and ratings were stored reuse their current
+        # metadata, then receive one additive enrichment without losing
+        # artwork when a remote provider is unavailable.
+        if auto_scrape and (
+            not metadata_reused_for_item
+            or metadata_needs_date_refresh
+            or metadata_needs_rating_refresh
+        ):
             if scraper is None:
                 scraper = _create_scraper()
                 if scraper is None:
                     auto_scrape = False
             if auto_scrape and scraper is not None:
-                _set_status(source_id, stage="scrape")
-                _scrape_metadata(source_id, [item], scraper=scraper)
+                _set_status(source_id, stage="scrape", activity="正在准备刮削")
+                _scrape_metadata(
+                    source_id,
+                    [item],
+                    scraper=scraper,
+                    progress_index=index,
+                    progress_total=len(movies),
+                )
                 metadata_scraped += 1
         elif item.get("metadata_locked"):
             logger.info("已锁定自定义资料，跳过自动刮削：%s", item.get("display_title") or item.get("title", ""))
         _set_status(
             source_id,
+            stage="parse",
+            activity="正在整理影视",
             current=item.get("title", ""),
             processed=index,
             total=len(movies),
@@ -364,9 +400,21 @@ def _scan_source(source_id: str) -> None:
             episodesUpdated=episodes_updated,
         )
         enriched.append(item)
+        # Persist every completed entry as soon as its scrape finishes. The
+        # home page can then refresh from real library data before this source
+        # has finished processing its remaining files.
+        library_service.upsert_movie(item)
+        items_published += 1
+        _set_status(source_id, itemsPublished=items_published)
 
-    existing = [m for m in previous_library if m.get("source_id") != source_id]
-    library_service.save_library(existing + enriched)
+    # Only a complete scan can establish that a previously known file has
+    # disappeared. A cancelled scan retains old entries and newly published
+    # cards alike.
+    if not _is_cancelled(source_id):
+        library_service.remove_source_movies_not_in(
+            source_id,
+            [str(item.get("id") or "") for item in enriched],
+        )
 
     stats = library_service.compute_stats(enriched)
     _update_source_after_scan(source_id, stats=stats, scan_error="")
@@ -382,6 +430,7 @@ def _scan_source(source_id: str) -> None:
             metadataReused=metadata_reused,
             metadataScraped=metadata_scraped,
             episodesUpdated=episodes_updated,
+            itemsPublished=items_published,
             error="扫描已取消",
             finishedAt=_now_iso(),
         )
@@ -396,6 +445,7 @@ def _scan_source(source_id: str) -> None:
             metadataReused=metadata_reused,
             metadataScraped=metadata_scraped,
             episodesUpdated=episodes_updated,
+            itemsPublished=items_published,
             error="",
             finishedAt=_now_iso(),
         )
@@ -628,6 +678,17 @@ def _selected_paths(source: dict[str, Any]) -> Optional[list[str]]:
     return []
 
 
+def _source_scan_roots(source: dict[str, Any]) -> list[str]:
+    selected_paths = _selected_paths(source)
+    if selected_paths is not None:
+        return selected_paths
+    if source.get("type") == "local":
+        return [str(source.get("path") or "")]
+    if source.get("type") == "openlist":
+        return [str(source.get("mount_path") or "/")]
+    return ["/"]
+
+
 def _build_webdav_base_url(source: dict[str, Any]) -> str:
     host = str(source.get("host") or "").strip()
     protocol = str(source.get("protocol") or "http").strip() or "http"
@@ -776,14 +837,30 @@ def _create_scraper() -> Any | None:
         return None
 
 
-def _scrape_metadata(source_id: str, movies: list[dict[str, Any]], scraper: Any | None = None) -> None:
+def _scrape_metadata(
+    source_id: str,
+    movies: list[dict[str, Any]],
+    scraper: Any | None = None,
+    progress_index: int | None = None,
+    progress_total: int | None = None,
+) -> None:
     if scraper is None:
         scraper = _create_scraper()
     if scraper is None:
         return
 
+    provider_labels = {"anibk": "AniBK", "douban": "豆瓣", "tmdb": "TMDB"}
     for index, movie in enumerate(movies, start=1):
-        _set_status(source_id, current=movie.get("title", ""), processed=index)
+        processed = progress_index if progress_index is not None else index
+        status_updates = {
+            "stage": "scrape",
+            "activity": "正在准备元数据",
+            "current": movie.get("title", ""),
+            "processed": processed,
+        }
+        if progress_total is not None:
+            status_updates["total"] = progress_total
+        _set_status(source_id, **status_updates)
         try:
             scrape_title = (
                 str(movie.get("series_title") or "").strip()
@@ -795,6 +872,19 @@ def _scrape_metadata(source_id: str, movies: list[dict[str, Any]], scraper: Any 
             query_names = _scrape_query_names(movie)
             preferred_source = _preferred_scrape_source(scraper, movie)
             logger.info("开始刮削：选择%s源 搜索名：%s", preferred_source, " ，".join(query_names))
+
+            def report_provider(provider: str) -> None:
+                label = provider_labels.get(str(provider or "").lower(), str(provider or "元数据源"))
+                updates = {
+                    "stage": "scrape",
+                    "activity": f"正在查询 {label}",
+                    "current": movie.get("title", ""),
+                    "processed": processed,
+                }
+                if progress_total is not None:
+                    updates["total"] = progress_total
+                _set_status(source_id, **updates)
+
             meta = scraper.scrape(
                 scrape_title,
                 category=movie.get("category", "电影"),
@@ -806,7 +896,9 @@ def _scrape_metadata(source_id: str, movies: list[dict[str, Any]], scraper: Any 
                 origin_countries=movie.get("origin_countries", []),
                 chapter_name=movie.get("chapter_name", ""),
                 part=movie.get("part"),
+                progress_callback=report_provider,
             )
+            _set_status(source_id, stage="scrape", activity="正在保存元数据", current=movie.get("title", ""), processed=processed)
             if meta.get("title") or meta.get("cover_url"):
                 logger.info("搜索到  %s下载元数据和封面", meta.get("title") or scrape_title)
                 logger.info("刮削成功")
@@ -828,6 +920,8 @@ def _scrape_metadata(source_id: str, movies: list[dict[str, Any]], scraper: Any 
                 movie["tags"] = meta["tags"]
             if meta.get("year"):
                 movie["year"] = meta["year"]
+            if meta.get("release_date"):
+                movie["release_date"] = meta["release_date"]
             if meta.get("duration"):
                 movie["duration"] = meta["duration"]
             for key in (
@@ -854,6 +948,9 @@ def _scrape_metadata(source_id: str, movies: list[dict[str, Any]], scraper: Any 
                 movie["is_series"] = True
             elif media_type == "movie":
                 movie["is_series"] = False
+            if meta.get("title") or meta.get("cover_url") or meta.get("description"):
+                movie["release_date_checked"] = True
+                movie["rating_checked"] = True
         except Exception as exc:
             logger.warning("刮削失败：%s error=%s", movie.get("title", ""), exc)
         finally:

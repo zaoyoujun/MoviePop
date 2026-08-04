@@ -3,6 +3,7 @@ import logging
 import os
 import re
 import time
+from datetime import date
 from http.cookies import SimpleCookie
 from pathlib import Path
 from urllib.parse import quote, urljoin
@@ -55,13 +56,15 @@ COVERS_DIR.mkdir(parents=True, exist_ok=True)
 
 _COVER_CACHE = {}
 _COVER_CACHE_LOADED = False
+_URL_COVER_CACHE = {}
 
 
 def _load_cover_cache():
-    global _COVER_CACHE, _COVER_CACHE_LOADED
+    global _COVER_CACHE, _COVER_CACHE_LOADED, _URL_COVER_CACHE
     if _COVER_CACHE_LOADED:
         return
     _COVER_CACHE = {}
+    _URL_COVER_CACHE = {}
     try:
         for filepath in COVERS_DIR.iterdir():
             if filepath.is_file() and filepath.suffix.lower() in ('.webp', '.jpg', '.jpeg', '.png'):
@@ -77,6 +80,12 @@ def _load_cover_cache():
                 if key not in _COVER_CACHE:
                     _COVER_CACHE[key] = []
                 _COVER_CACHE[key].append(filename)
+                hash_match = re.search(r"_([0-9a-f]{8})\.(?:webp|jpe?g|png)$", filename, re.IGNORECASE)
+                if hash_match:
+                    url_hash = hash_match.group(1).lower()
+                    existing = _URL_COVER_CACHE.get(url_hash)
+                    if not existing or filename < existing:
+                        _URL_COVER_CACHE[url_hash] = filename
     except Exception as e:
         logger.warning("加载封面缓存失败: %s", e)
     _COVER_CACHE_LOADED = True
@@ -122,6 +131,28 @@ def _find_local_cover(title: str, season: int = 1, chapter_name: str = "", part:
     if loose_candidates:
         return f"/covers/{quote(loose_candidates[0])}"
     return ""
+
+
+def _find_local_cover_by_url(image_url: str) -> str:
+    """Return an existing local image for the same remote URL, regardless of season."""
+    if not image_url:
+        return ""
+    _load_cover_cache()
+    url_hash = hashlib.md5(image_url.encode()).hexdigest()[:8]
+    filename = _URL_COVER_CACHE.get(url_hash)
+    if filename and (COVERS_DIR / filename).is_file():
+        return f"/covers/{quote(filename)}"
+    return ""
+
+
+def _remember_cover_url(image_url: str, filename: str) -> None:
+    if not image_url or not filename:
+        return
+    _load_cover_cache()
+    url_hash = hashlib.md5(image_url.encode()).hexdigest()[:8]
+    existing = _URL_COVER_CACHE.get(url_hash)
+    if not existing or filename < existing:
+        _URL_COVER_CACHE[url_hash] = filename
 
 
 # ==================== 杈呭姪鍑芥暟 ====================
@@ -226,6 +257,7 @@ class CoverScraper:
             "countries": [],
             "languages": [],
             "year": year,
+            "release_date": "",
             "duration": "",
             "metadata_source": "",
             "original_title": "",
@@ -256,6 +288,7 @@ class CoverScraper:
             "backdrop_url",
             "description",
             "year",
+            "release_date",
             "duration",
             "metadata_source",
             "original_title",
@@ -319,6 +352,8 @@ class CoverScraper:
                 merged[key] = douban_meta[key]
         if douban_meta.get("year") and not merged.get("year"):
             merged["year"] = douban_meta["year"]
+        if douban_meta.get("release_date") and not merged.get("release_date"):
+            merged["release_date"] = douban_meta["release_date"]
         if douban_meta.get("description") and not merged.get("description"):
             merged["description"] = douban_meta["description"]
         if allow_cover and douban_meta.get("cover_url"):
@@ -348,6 +383,10 @@ class CoverScraper:
             merged["backdrop_url"] = tmdb_meta["cover_url"]
         if allow_cover and tmdb_meta.get("cover_url") and not merged.get("cover_url"):
             merged["cover_url"] = tmdb_meta["cover_url"]
+        if tmdb_meta.get("release_date") and not merged.get("release_date"):
+            merged["release_date"] = tmdb_meta["release_date"]
+        if not merged.get("score") and tmdb_meta.get("score"):
+            merged["score"] = tmdb_meta["score"]
         for key in ("tmdb_id", "tmdb_media_type", "season_tmdb_id", "season_title", "original_title", "vote_count"):
             if tmdb_meta.get(key) and not merged.get(key):
                 merged[key] = tmdb_meta[key]
@@ -358,11 +397,20 @@ class CoverScraper:
 
     def scrape(self, title: str, category: str = "anime", year: int = 0, season: int = 1, 
                is_series: bool = False, season_title: str = "", aliases: list[str] | None = None,
-               origin_countries: list[str] | None = None, chapter_name: str = "", part: int | None = None) -> dict:
+               origin_countries: list[str] | None = None, chapter_name: str = "", part: int | None = None,
+               progress_callback=None) -> dict:
         # docstring removed after encoding cleanup
         result = self._empty_result(year)
         if not title or len(title) < 2:
             return result
+
+        def report_provider(provider: str) -> None:
+            if not progress_callback:
+                return
+            try:
+                progress_callback(provider)
+            except Exception as exc:
+                logger.debug("刮削进度回调失败: %s", exc)
 
         configured_source = str(getattr(self.config, "SCRAPE_SOURCE", "auto") or "auto").strip().lower()
         if configured_source in {"anibk", "douban", "tmdb"}:
@@ -370,6 +418,7 @@ class CoverScraper:
             # provider was still queried.  Try the selected source first and
             # only fall back when it has no usable result.
             for provider in self._scrape_source_order(category):
+                report_provider(provider)
                 candidate = self._scrape_provider(
                     provider,
                     title,
@@ -389,6 +438,7 @@ class CoverScraper:
             return result
 
         if self._category_kind(category) == "anime":
+            report_provider("anibk")
             result = self._scrape_anibk(title, year, season, season_title, chapter_name, part)
             score = float(result.get("match_score") or 0)
             is_special_type = bool(season_title and any(kw in season_title for kw in ["OVA", "OAD", "特别篇", "剧场版", "番外", "总集篇"]))
@@ -399,27 +449,36 @@ class CoverScraper:
                     logger.debug("AniBK match score %.1f below threshold %.1f, trying Douban fallback: %s", score, score_threshold, title)
                 else:
                     logger.debug("AniBK did not provide an exact anime result, trying Douban fallback: %s", title)
+                report_provider("douban")
                 result = self._scrape_douban(title, year, season, chapter_name, part)
                 if not self._has_metadata(result):
+                    report_provider("tmdb")
                     result = self._scrape_tmdb(title, year, season, category, season_title, aliases, origin_countries, chapter_name, part)
                 else:
+                    report_provider("tmdb")
                     tmdb_meta = self._scrape_tmdb(title, year, season, category, season_title, aliases, origin_countries, chapter_name, part)
                     result = self._merge_tmdb_artwork(result, tmdb_meta, allow_cover=False)
             else:
+                report_provider("douban")
                 douban_meta = self._scrape_douban(title, year, season, "", None)
                 result = self._merge_douban_facts(result, douban_meta, allow_cover=False)
+                report_provider("tmdb")
                 tmdb_meta = self._scrape_tmdb(title, year, season, category, season_title, aliases, origin_countries, chapter_name, part)
                 result = self._merge_tmdb_artwork(result, tmdb_meta, allow_cover=False)
             if not result.get("backdrop_url"):
                 result["backdrop_url"] = result.get("cover_url", "")
             return result
 
+        report_provider("douban")
         result = self._scrape_douban(title, year, season, chapter_name, part)
         if self._has_metadata(result):
+            report_provider("tmdb")
             tmdb_meta = self._scrape_tmdb(title, year, season, category, season_title, aliases, origin_countries, chapter_name, part)
             result = self._merge_tmdb_artwork(result, tmdb_meta, allow_cover=False)
         else:
+            report_provider("tmdb")
             result = self._scrape_tmdb(title, year, season, category, season_title, aliases, origin_countries, chapter_name, part)
+            report_provider("douban")
             douban_meta = self._scrape_douban(title, year, season, chapter_name, part)
             result = self._merge_douban_facts(result, douban_meta, allow_cover=True)
         if not result.get("backdrop_url"):
@@ -626,9 +685,11 @@ class CoverScraper:
         if intro:
             result["description"] = intro[:500]
 
-        anibk_year = self._get_anibk_year(detail_url)
-        if anibk_year:
-            result["year"] = anibk_year
+        release_info = self._get_anibk_release_info(detail_url)
+        if release_info.get("year"):
+            result["year"] = release_info["year"]
+        if release_info.get("release_date"):
+            result["release_date"] = release_info["release_date"]
 
         result["match_score"] = best.get("match_score", 0)
         return result
@@ -875,6 +936,25 @@ class CoverScraper:
                 return year
         return None
 
+    @staticmethod
+    def _normalize_release_date(value) -> str:
+        """Return a verified ISO date when a provider exposes a full date."""
+        text = str(value or "").strip()
+        match = re.search(
+            r"(?<!\d)((?:19|20|21)\d{2})\s*(?:[-/.年])\s*(\d{1,2})\s*(?:[-/.月])\s*(\d{1,2})(?:日)?",
+            text,
+        )
+        if not match:
+            return ""
+        try:
+            return date(
+                int(match.group(1)),
+                int(match.group(2)),
+                int(match.group(3)),
+            ).isoformat()
+        except ValueError:
+            return ""
+
     def _search_anibk(self, query: str) -> list:
         # docstring removed after encoding cleanup
         try:
@@ -1058,6 +1138,17 @@ class CoverScraper:
             info_el = soup.find(id="info")
             if info_el:
                 info_text = info_el.get_text("\n", strip=True)
+                release_values = (
+                    self._extract_douban_info_values(info_text, "上映日期")
+                    or self._extract_douban_info_values(info_text, "首播")
+                    or self._extract_douban_info_values(info_text, "发行日期")
+                )
+                for release_value in release_values:
+                    release_date = self._normalize_release_date(release_value)
+                    if release_date:
+                        result["release_date"] = release_date
+                        result["year"] = int(release_date[:4])
+                        break
                 countries = self._extract_douban_info_values(info_text, "制片国家/地区")
                 duration = (
                     self._extract_douban_info_values(info_text, "片长")
@@ -1149,7 +1240,17 @@ class CoverScraper:
             result["description"] = translate_to_chinese(((season_details.get("overview") or details.get("overview") or best.get("overview") or "")[:500]))
             result["score"] = round(float(details.get("vote_average") or best.get("vote_average") or 0), 1)
             result["vote_count"] = int(details.get("vote_count") or best.get("vote_count") or 0)
-            found_year = self._extract_year(
+            release_date = self._normalize_release_date(
+                season_details.get("air_date")
+                or details.get("release_date")
+                or details.get("first_air_date")
+                or best.get("release_date")
+                or best.get("first_air_date")
+                or ""
+            )
+            if release_date:
+                result["release_date"] = release_date
+            found_year = self._extract_year(release_date) or self._extract_year(
                 details.get("release_date") or details.get("first_air_date") or best.get("release_date") or best.get("first_air_date") or ""
             )
             if found_year:
@@ -1385,6 +1486,9 @@ class CoverScraper:
 
             release_el = card.find(class_=re.compile(r"release_date"))
             release_text = release_el.get_text(" ", strip=True) if release_el else ""
+            release_date = self._normalize_release_date(release_text)
+            if release_date:
+                result["release_date"] = release_date
             year_match = re.search(r"(19\d{2}|20\d{2}|21\d{2})", release_text)
             if year_match:
                 result["year"] = int(year_match.group(1))
@@ -1495,8 +1599,9 @@ class CoverScraper:
             logger.warning("提取简介失败: %s", e)
             return ""
 
-    def _get_anibk_year(self, detail_url: str) -> int:
-        # docstring removed after encoding cleanup
+    def _get_anibk_release_info(self, detail_url: str) -> dict:
+        """Extract AniBK's full premiere date when the detail page provides it."""
+        result = {"year": 0, "release_date": ""}
         try:
             headers = HEADERS.copy()
             headers["Referer"] = ANIBK_BASE
@@ -1505,43 +1610,48 @@ class CoverScraper:
             resp.encoding = "utf-8"
 
             soup = BeautifulSoup(resp.text, "html.parser")
-            page_text = soup.get_text()
+            page_text = soup.get_text("\n", strip=True)
 
-            # 1. "涓婃槧鏃堕棿|鍙戣鏃堕棿|棣栨挱鏃堕棿|鎾嚭鏃堕棿" 鍚庣殑骞翠唤
-            date_match = re.search(r"(涓婃槧鏃堕棿|鍙戣鏃堕棿|棣栨挱鏃堕棿|鎾嚭鏃堕棿)\s*[锛?]\s*(\d{4})", page_text)
-            if date_match:
-                return int(date_match.group(2))
+            for label in ("上映时间", "发行时间", "首播时间", "放送时间", "播出时间", "开播时间"):
+                for line in page_text.splitlines():
+                    if label not in line:
+                        continue
+                    release_date = self._normalize_release_date(line)
+                    if release_date:
+                        result["release_date"] = release_date
+                        result["year"] = int(release_date[:4])
+                        return result
 
-            # 2. YYYY-MM-DD 鏍煎紡
-            full_date = re.search(r"(\d{4})-\d{2}-\d{2}", page_text)
-            if full_date:
-                return int(full_date.group(1))
+            release_date = self._normalize_release_date(page_text)
+            if release_date:
+                result["release_date"] = release_date
+                result["year"] = int(release_date[:4])
+                return result
 
-            # 3. 鏍囬涓殑骞翠唤
             title_elem = soup.find("h1", class_="bk-title") or soup.find("h1")
             if title_elem:
-                title_text = title_elem.get_text(strip=True)
-                title_year_match = re.search(r'[(（](\d{4})[)）]', title_text)
+                title_year_match = re.search(r'[(（](\d{4})[)）]', title_elem.get_text(strip=True))
                 if title_year_match:
-                    return int(title_year_match.group(1))
+                    result["year"] = int(title_year_match.group(1))
+                    return result
 
-            # 4. YYYY year format
             year_cn = re.search(r"(\d{4})年", page_text)
             if year_cn:
-                y = int(year_cn.group(1))
-                if 1900 <= y <= 2030:
-                    return y
+                year = int(year_cn.group(1))
+                if 1900 <= year <= 2035:
+                    result["year"] = year
+                    return result
+            for year_text in re.findall(r"(\d{4})", page_text):
+                year = int(year_text)
+                if 1900 <= year <= 2035:
+                    result["year"] = year
+                    break
+        except Exception as exc:
+            logger.warning("提取 AniBK 上映日期失败: %s", exc)
+        return result
 
-            all_years = re.findall(r"(\d{4})", page_text)
-            for y_str in all_years:
-                y = int(y_str)
-                if 1900 <= y <= 2030:
-                    return y
-
-            return 0
-        except Exception as e:
-            logger.warning("提取年份失败: %s", e)
-            return 0
+    def _get_anibk_year(self, detail_url: str) -> int:
+        return int(self._get_anibk_release_info(detail_url).get("year") or 0)
 
     def _download_cover(self, image_url: str, title: str, season: int = 1, chapter_name: str = "", part: int | None = None, image_type: str = "poster") -> str:
         # Download a cover image to covers/ and return the local URL.
@@ -1549,6 +1659,11 @@ class CoverScraper:
         try:
             if not image_url:
                 return ""
+
+            local_cover = _find_local_cover_by_url(image_url)
+            if local_cover:
+                logger.debug("Reusing local cover by image URL: %s", local_cover)
+                return local_cover
 
             local_cover = _find_local_cover(title, season, chapter_name, part, image_type)
             if local_cover:
@@ -1570,6 +1685,7 @@ class CoverScraper:
             filename = f"{safe_title}{season_suffix}{chapter_suffix}{part_suffix}{type_suffix}_{file_hash}.webp"
             filepath = COVERS_DIR / filename
             if filepath.exists():
+                _remember_cover_url(image_url, filename)
                 return f"/covers/{quote(filename)}"
 
             headers = HEADERS.copy()
@@ -1599,6 +1715,7 @@ class CoverScraper:
                 for chunk in resp.iter_content(chunk_size=1024 * 8):
                     f.write(chunk)
 
+            _remember_cover_url(image_url, filename)
             logger.debug("Cover downloaded: %s", filename)
             return f"/covers/{quote(filename)}"
         except Exception as e:

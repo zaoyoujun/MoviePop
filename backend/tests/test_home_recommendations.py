@@ -128,8 +128,59 @@ def test_added_at_is_persisted_for_recent_library_recommendations(tmp_path, monk
             "id": "recent-item",
             "title": "Recent Item",
             "updated_at": "2026-07-29T00:00:00",
+            "release_date": "2026-07-28",
+            "release_date_checked": True,
+            "rating_checked": True,
         }
     ])
 
     assert db_service.load_library()[0]["added_at"] == "2026-07-29T00:00:00"
     assert db_service.get_movie_by_id("recent-item")["added_at"] == "2026-07-29T00:00:00"
+    assert db_service.load_library()[0]["release_date"] == "2026-07-28"
+    assert db_service.get_movie_by_id("recent-item")["release_date_checked"] is True
+    assert db_service.get_movie_by_id("recent-item")["rating_checked"] is True
+
+
+def test_selected_season_is_used_as_the_home_presentation(monkeypatch):
+    season_one = _movie(
+        "show-s1",
+        title="Example Show",
+        series_title="Example Show",
+        category="series",
+        is_series=True,
+        season=1,
+        cover_url="/covers/show-s1.jpg",
+        backdrop_url="/backdrops/show-s1.jpg",
+        release_date="2016-04-04",
+    )
+    season_two = _movie(
+        "show-s2",
+        title="Example Show",
+        series_title="Example Show",
+        category="series",
+        is_series=True,
+        season=2,
+        cover_url="/covers/show-s2.jpg",
+        backdrop_url="/backdrops/show-s2.jpg",
+    )
+    library = [season_one, season_two]
+    saved = []
+    monkeypatch.setattr(library_service, "load_library", lambda: library)
+    monkeypatch.setattr(library_service, "save_library", lambda movies: saved.append(movies))
+
+    selected = library_service.set_home_presentation("show-s2")
+    home = library_service.build_home_data(saved[0], category=None, limit=12)
+
+    assert selected is season_two
+    assert [movie["home_display"] for movie in saved[0]] == [False, True]
+    assert home["items"][0]["id"] == "show-s2"
+    assert home["items"][0]["coverUrl"] == "/covers/show-s2.jpg"
+    assert home["hero"][0]["id"] == "show-s2"
+    assert home["hero"][0]["backdropUrl"] == "/backdrops/show-s2.jpg"
+
+
+def test_movie_api_exposes_full_release_date_without_replacing_year():
+    item = library_service.movie_to_api_format(_movie("dated", year=2024, release_date="2024-04-03"))
+
+    assert item["year"] == 2024
+    assert item["releaseDate"] == "2024-04-03"

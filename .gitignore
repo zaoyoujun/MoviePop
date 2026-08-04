@@ -8,6 +8,7 @@ build/
 build-*/
 backend-dist/
 backend-build/
+release*/
 
 # Frontend auto-generated files
 auto-imports.d.ts

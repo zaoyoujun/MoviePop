@@ -20,8 +20,16 @@ if (-not (Test-Path -LiteralPath $Python)) {
 }
 
 $Uv = Get-Command uv -ErrorAction SilentlyContinue
+$UseExistingPyInstaller = $false
 if ($null -eq $Uv) {
-    throw "uv is required to install the isolated build dependency PyInstaller."
+    # Release builds should still work in an offline or minimal Windows setup
+    # when the project's virtual environment already contains PyInstaller.
+    & $Python -m PyInstaller --version
+    if ($LASTEXITCODE -ne 0) {
+        throw "uv is unavailable and PyInstaller is not installed in $Python. Install uv or run '$Python -m pip install pyinstaller PySide6-Essentials'."
+    }
+    $UseExistingPyInstaller = $true
+    Write-Host "uv is unavailable; using the existing PyInstaller in the project virtual environment."
 }
 
 if (-not (Test-Path -LiteralPath $RuntimeBootstrap)) {
@@ -47,9 +55,11 @@ if ($null -eq $MpvDll) {
     throw "libmpv DLL not found. Place mpv-2.dll, libmpv-2.dll, or mpv-1.dll in $PlayerRoot, or set MPV_DLL_PATH to its absolute path."
 }
 
-& $Uv.Source pip install --python $Python pyinstaller 'PySide6-Essentials>=6.8,<7'
-if ($LASTEXITCODE -ne 0) {
-    throw 'Failed to install PyInstaller or PySide6 into .venv.'
+if (-not $UseExistingPyInstaller) {
+    & $Uv.Source pip install --python $Python pyinstaller 'PySide6-Essentials>=6.8,<7'
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Failed to install PyInstaller or PySide6 into .venv.'
+    }
 }
 
 $PlayerData = @(

@@ -112,7 +112,7 @@ import {
 import { MOCK_DATA } from '@/api/mockData'
 
 // 全局扫描进度 Toast（模块单例，跨页面常驻）
-import { scanToast, showScanToast, hideScanToast } from '@/composables/useScanToast'
+import { markScanItemsPublished, scanToast, showScanToast, hideScanToast } from '@/composables/useScanToast'
 
 /**
  * ==================== 常量定义 ====================
@@ -622,25 +622,31 @@ async function handleDelete(id) {
  */
 function formatScanMessage(status) {
   if (!status) return '正在扫描...';
+  const activity = String(status.activity || '').trim()
+  const withActivity = message => activity ? `${message} · ${activity}` : message
+
+  if (status.stage === 'queued') {
+    return activity || '正在等待扫描开始';
+  }
 
   if (status.stage === 'scan') {
     const found = Number(status.filesFound || 0)
     const suffix = found ? `（已发现 ${found} 个视频）` : ''
-    return status.current
+    return withActivity(status.current
       ? `正在扫描目录 ${status.current}${suffix}`
-      : `正在扫描目录${suffix}`;
+      : `正在扫描目录${suffix}`);
   }
 
   if (status.stage === 'parse') {
-    return status.current
-      ? `扫描到电影 ${status.current}`
-      : '正在识别影片';
+    return withActivity(status.current
+      ? `正在整理影视 ${status.current}`
+      : '正在识别影片');
   }
 
   if (status.stage === 'scrape') {
-    return status.current
+    return withActivity(status.current
       ? `正在刮削影视 ${status.current}`
-      : '正在刮削影片信息';
+      : '正在刮削影片信息');
   }
 
   if (status.stage === 'done') {
@@ -662,7 +668,7 @@ function formatScanMessage(status) {
     return '扫描已取消';
   }
 
-  return '正在扫描...';
+  return withActivity('正在扫描...');
 }
 async function handleRescan(id) {
   // 发重扫
@@ -712,13 +718,18 @@ async function handleRescan(id) {
   }
   openedMenu.value = ''
 
-  // 轮询扫描进度，1秒一次
+  // 立即拉取首次状态；后续使用短轮询，让“当前影片 / 当前刮削源”及时可见。
   let message = '正在连接...'
   let scanStatus = 'scanning'
+  let isFirstPoll = true
+  let lastPublishedCount = 0
   showScanToast(id, message, 'scanning', { progress: 0 })
 
   while (scanStatus === 'scanning') {
-    await new Promise(r => setTimeout(r, 1000))
+    if (!isFirstPoll) {
+      await new Promise(r => setTimeout(r, 350))
+    }
+    isFirstPoll = false
     try {
       // 用户已点击取消，停止轮询，避免后端 scanning 状态覆盖前端 cancelled 状态
       if (scanToast.status === 'cancelled') {
@@ -727,6 +738,11 @@ async function handleRescan(id) {
       }
 
       const status = await getScanStatus(id)
+      const publishedCount = Math.max(0, Number(status.itemsPublished || 0))
+      if (publishedCount > lastPublishedCount) {
+        lastPublishedCount = publishedCount
+        markScanItemsPublished({ sourceId: id, count: publishedCount })
+      }
 
       if (status.stage === 'cancelled') {
         scanStatus = 'cancelled'
@@ -743,7 +759,7 @@ async function handleRescan(id) {
         break
       }
 
-      scanStatus = status.scanning ? 'scanning' : 'done'
+      scanStatus = status.scanning ? 'scanning' : (status.stage === 'error' ? 'error' : 'done')
       message = formatScanMessage(status)
 
       // 计算进度
@@ -757,13 +773,16 @@ async function handleRescan(id) {
         totalFiles: total,
         currentFile: status.current || ''
       })
+      if (scanStatus === 'error') break
     } catch (error) {
-      scanStatus = 'done'
+      scanStatus = 'error'
+      showScanToast(id, error instanceof Error ? error.message : '无法获取扫描状态', 'error')
     }
   }
 
-  // 扫描完成或取消后，停留2秒后隐藏并刷新列表
-  if (scanStatus !== 'cancelled') {
+  // 完成后停留片刻展示结果；错误状态保留给用户手动关闭。
+  if (scanStatus === 'done') {
+    await new Promise(r => setTimeout(r, 1800))
     hideScanToast()
   }
   await loadSources()

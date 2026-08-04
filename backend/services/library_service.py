@@ -437,6 +437,7 @@ def _home_group_key(movie: dict) -> str:
 
 def _home_representative_sort_key(movie: dict) -> tuple:
     return (
+        0 if _as_bool(movie.get("home_display")) else 1,
         1 if str(movie.get("version_title") or "").strip() else 0,
         int(movie.get("season") or 1),
         int(movie.get("part") or 0),
@@ -476,6 +477,26 @@ def _collapse_home_movies(movies: list[dict]) -> list[dict]:
     return representatives
 
 
+def set_home_presentation(movie_id: str) -> Optional[dict]:
+    """Persist one season, chapter, or edition as a work's home presentation."""
+    target_id = str(movie_id or "").strip()
+    if not target_id:
+        return None
+
+    movies = load_library()
+    target = next((movie for movie in movies if str(movie.get("id") or "") == target_id), None)
+    if not target:
+        return None
+
+    group_key = _home_group_key(target)
+    for movie in movies:
+        if _home_group_key(movie) == group_key:
+            movie["home_display"] = str(movie.get("id") or "") == target_id
+
+    save_library(movies)
+    return target
+
+
 def _related_movies_for_detail(movie: dict) -> list[dict]:
     group_key = _resource_group_key(movie)
     if not group_key:
@@ -499,6 +520,37 @@ def _related_movies_for_detail(movie: dict) -> list[dict]:
     return related
 
 
+def _detail_label_key(value: Any) -> str:
+    return re.sub(r"[^\w\u4e00-\u9fff]", "", str(value or "")).casefold()
+
+
+def _detail_season_axis(movie: dict) -> tuple[str, str, int]:
+    """Return the season subtitle and chapter fields used by detail clients.
+
+    New scans persist ``chapter_name`` directly.  The small legacy fallback
+    keeps existing libraries correct until their next scan: older databases
+    stored a folder such as ``袭击篇 #1`` only as ``season_title``.
+    """
+    season_title = str(movie.get("season_title") or "").strip()
+    chapter_name = str(movie.get("chapter_name") or "").strip()
+    part = int(movie.get("part") or 0)
+    version_title = str(movie.get("version_title") or "").strip()
+
+    if version_title and _detail_label_key(version_title) == _detail_label_key(season_title):
+        season_title = ""
+
+    if part and re.fullmatch(rf"part\s*{part}", season_title, re.IGNORECASE):
+        season_title = ""
+
+    if not chapter_name and part:
+        legacy_match = re.fullmatch(r"\s*(?P<name>[\u4e00-\u9fff]{2,}[篇章])\s*#\s*(?P<part>\d+)\s*", season_title)
+        if legacy_match and int(legacy_match.group("part")) == part:
+            chapter_name = legacy_match.group("name")
+            season_title = ""
+
+    return season_title, chapter_name, part
+
+
 def _media_structure_for_detail(related_movies: list[dict]) -> dict:
     """Build explicit season, variant and chapter axes for detail consumers."""
     variants: dict[str, dict] = {}
@@ -506,10 +558,8 @@ def _media_structure_for_detail(related_movies: list[dict]) -> dict:
 
     for related in related_movies:
         season_number = int(related.get("season") or 1)
-        season_title = str(related.get("season_title") or "").strip()
+        season_title, chapter_name, part = _detail_season_axis(related)
         version_title = str(related.get("version_title") or "").strip()
-        chapter_name = str(related.get("chapter_name") or "").strip()
-        part = int(related.get("part") or 0)
         season_key = f"S{season_number}:{season_title}"
         variant_key = version_title or "default"
         variant = variants.setdefault(variant_key, {
@@ -611,6 +661,21 @@ def load_library() -> list:
 def save_library(movies: list) -> None:
     """保存媒体库（到 SQLite 数据库）"""
     db_service.save_library(movies)
+
+
+def upsert_movie(movie: dict) -> None:
+    """Persist one scanned resource while keeping all other resources available."""
+    db_service.upsert_movie(movie)
+
+
+def remove_source_movies_not_in(source_id: str, movie_ids: list[str]) -> None:
+    """Remove files that disappeared from one source after its scan finishes."""
+    db_service.remove_source_movies_not_in(source_id, movie_ids)
+
+
+def remove_source_movies_outside_paths(source_id: str, selected_paths: list[str]) -> int:
+    """Drop stale records as soon as a source's selected directories change."""
+    return db_service.remove_source_movies_outside_paths(source_id, selected_paths)
 
 
 def clear_library() -> None:
@@ -931,11 +996,13 @@ def movie_to_api_format(movie: dict) -> dict:
         "versionTitle": movie.get("version_title", ""),
         "variantCount": movie.get("variant_count", 1),
         "hasVersions": bool(movie.get("has_versions") or movie.get("version_title")),
+        "homeDisplay": _as_bool(movie.get("home_display")),
         "seasonCount": movie.get("season_count", 1),
         "alias": movie.get("alias", []) if isinstance(movie.get("alias"), list) else [],
         "category": category,
         "categories": _api_categories(movie),
         "year": movie.get("year", movie.get("year_hint", 0)),
+        "releaseDate": movie.get("release_date") or "",
         "sourceType": source_type,
         "sourceName": movie.get("source_name", ""),
         "durationText": movie.get("duration", ""),
@@ -1033,9 +1100,8 @@ def movie_to_detail(movie: dict) -> dict:
     
     for related in related_movies:
         season_number = int(related.get("season") or 1)
-        season_title = str(related.get("season_title") or "").strip()
+        season_title, chapter_name, part = _detail_season_axis(related)
         explicit_version_title = str(related.get("version_title") or "").strip()
-        part = int(related.get("part") or 0)
         
         season_name = season_title or f"第{season_number}季"
         
@@ -1079,6 +1145,7 @@ def movie_to_detail(movie: dict) -> dict:
                 "description": related.get("intro", ""),
                 "score": related.get("rating", 0) or 0,
                 "year": related.get("year", related.get("year_hint", 0)),
+                "releaseDate": related.get("release_date") or "",
                 "tags": _merge_unique_labels(related.get("tags"), related.get("genres"), related.get("countries")),
                 "coverUrl": related.get("cover_url") or "",
                 "backdropUrl": related.get("backdrop_url") or related.get("cover_url") or "",
@@ -1086,7 +1153,7 @@ def movie_to_detail(movie: dict) -> dict:
                 "versions": [],
             }
         
-        chapter_name = f"Part {part}" if part else ""
+        chapter_name = chapter_name or (f"Part {part}" if part else "")
         
         if chapter_name:
             version_name = f"{season_name} {chapter_name}"
@@ -1113,6 +1180,7 @@ def movie_to_detail(movie: dict) -> dict:
             "description": related.get("intro", ""),
             "score": related.get("rating", 0) or 0,
             "year": related.get("year", related.get("year_hint", 0)),
+            "releaseDate": related.get("release_date") or "",
             "tags": _merge_unique_labels(related.get("tags"), related.get("genres"), related.get("countries")),
             "versionName": version_name,
             "label": chapter_name if chapter_name else season_name,
@@ -1143,7 +1211,7 @@ def movie_to_detail(movie: dict) -> dict:
     detail["hasMultipleSeasons"] = len(detail["seasons"]) > 1
     
     season_number = int(movie.get("season") or 1)
-    season_title = str(movie.get("season_title") or "").strip()
+    season_title, _, _ = _detail_season_axis(movie)
     detail["currentSeasonNumber"] = season_number
     detail["seasonTitle"] = season_title or f"第{season_number}季"
 
@@ -1548,7 +1616,11 @@ def _build_home_hero(movies: list[dict], limit: int = 5, now: Optional[datetime]
             -entry["score"],
             entry["daily_tiebreaker"],
         ))
-        presentation_movie = dict(chosen["movie"])
+        preferred_entry = next(
+            (entry for entry in group if _as_bool(entry["movie"].get("home_display"))),
+            None,
+        )
+        presentation_movie = dict((preferred_entry or chosen)["movie"])
         artwork_movie = visual_entries[0]["movie"]
         if not presentation_movie.get("backdrop_url"):
             presentation_movie["backdrop_url"] = artwork_movie.get("backdrop_url") or artwork_movie.get("cover_url") or ""
@@ -1609,6 +1681,7 @@ def _build_home_hero(movies: list[dict], limit: int = 5, now: Optional[datetime]
             "title": api_item["title"],
             "category": api_item["category"],
             "year": api_item["year"],
+            "releaseDate": api_item.get("releaseDate", ""),
             "sourceType": api_item["sourceType"],
             "sourceName": api_item["sourceName"],
             "durationText": api_item["durationText"],

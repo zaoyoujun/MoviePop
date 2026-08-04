@@ -32,6 +32,10 @@ export const scanToast = reactive({
 // 标记扫描是否已完成（用于跨页面刷新首页）
 let pendingScanCompleted = false
 
+// Set as soon as the scanner has persisted one finished resource. This lets a
+// kept-alive home page revalidate while a long scrape is still running.
+let pendingScanItemsPublished = false
+
 function markScanCompleted() {
   pendingScanCompleted = true
   window.dispatchEvent(new CustomEvent('scan:completed'))
@@ -40,6 +44,17 @@ function markScanCompleted() {
 export function consumeScanCompleted() {
   const value = pendingScanCompleted
   pendingScanCompleted = false
+  return value
+}
+
+export function markScanItemsPublished(detail = {}) {
+  pendingScanItemsPublished = true
+  window.dispatchEvent(new CustomEvent('scan:items-published', { detail }))
+}
+
+export function consumeScanItemsPublished() {
+  const value = pendingScanItemsPublished
+  pendingScanItemsPublished = false
   return value
 }
 

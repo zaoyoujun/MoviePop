@@ -60,7 +60,7 @@
                           <div class="result-info">
                             <div class="result-title">
                               {{ result.title }}
-                              <n-tag v-if="result.year" class="year-tag">{{ result.year }}</n-tag>
+                              <n-tag v-if="result.releaseDate || result.year" class="year-tag">{{ result.releaseDate || result.year }}</n-tag>
                               <n-tag class="source-tag" :class="result.source">{{ result.sourceLabel }}</n-tag>
                             </div>
                             <div class="result-meta">
@@ -111,6 +111,9 @@
                       <div class="form-row">
                         <n-form-item label="年份">
                           <n-input v-model:value="customForm.year" type="number" placeholder="输入年份" />
+                        </n-form-item>
+                        <n-form-item label="上映日期">
+                          <n-input v-model:value="customForm.releaseDate" type="date" />
                         </n-form-item>
                         <n-form-item label="评分">
                           <n-input v-model:value="customForm.score" type="number" placeholder="0-10" />
@@ -223,6 +226,7 @@ const customForm = reactive({
   title: '',
   originalTitle: '',
   year: '',
+  releaseDate: '',
   description: '',
   score: '',
   tagsInput: '',
@@ -284,6 +288,8 @@ async function handleSearch() {
       searchResults.value = data.data.map(item => ({
         title: item.title || item.name || '',
         year: item.year || '',
+        releaseDate: item.releaseDate || '',
+        score: Number(item.score || item.rating || 0),
         description: item.description || item.overview || '',
         poster: item.posterUrl || item.coverUrl || item.poster || '',
         backdrop: item.backdropUrl || '',
@@ -327,6 +333,8 @@ async function submitScrape(result, applyMode) {
           title: result.title,
           source: result.source,
           year: result.year,
+          releaseDate: result.releaseDate,
+          score: result.score,
           description: result.description,
           coverUrl: result.poster,
           backdropUrl: result.backdrop,
@@ -338,6 +346,8 @@ async function submitScrape(result, applyMode) {
         data = {
           title: result.title,
           year: result.year,
+          releaseDate: result.releaseDate,
+          score: result.score,
           description: result.description,
           genres: result.genres,
           countries: result.countries,
@@ -378,6 +388,7 @@ async function submitCustom() {
     title: customForm.title,
     originalTitle: customForm.originalTitle,
     year: customForm.year ? parseInt(customForm.year) : null,
+    releaseDate: customForm.releaseDate || '',
     description: customForm.description,
     score: customForm.score ? parseFloat(customForm.score) : null,
     tags: customForm.tagsInput.split(/[,，]/).map(s => s.trim()).filter(Boolean),
@@ -439,6 +450,7 @@ function resetCustomForm() {
   customForm.title = ''
   customForm.originalTitle = ''
   customForm.year = ''
+  customForm.releaseDate = ''
   customForm.description = ''
   customForm.score = ''
   customForm.tagsInput = ''

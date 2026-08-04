@@ -39,6 +39,11 @@ export function removeFavorite(id) {
   return del(`/movies/${id}/favorite`)
 }
 
+// 将某个季、篇章或版本作为同一影视在首页的展示版本
+export function setHomePresentation(id) {
+  return post(`/movies/${id}/home-presentation`)
+}
+
 // 获取历史记录
 export function getHistory(params = {}) {
   return get('/movies/history', params)
