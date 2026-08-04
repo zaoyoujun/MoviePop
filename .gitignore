@@ -61,6 +61,7 @@ __pycache__/
 *.pyc
 *.pyo
 .Python/
+.venv/
 
 # Player binaries
 backend/player/*.dll
