@@ -12,10 +12,12 @@ from fastapi.staticfiles import StaticFiles
 
 try:
     from .config import AppConfig
+    from .core import scheduler
     from .services import scan_service, source_service
     from .api.routes import restore_openlist_sources, router
 except ImportError:
     from config import AppConfig
+    from core import scheduler
     from services import scan_service, source_service
     from api.routes import restore_openlist_sources, router
 
@@ -89,6 +91,13 @@ async def startup_event():
             logger.error(f"OpenList 自动启动异常: {e}")
     
     logger.info(f"JMH-MoviePop API 启动成功，端口: {config.SERVER_PORT}")
+
+    # 启动后台调度器（每日 trending 刷新 + 首次下载检查）
+    try:
+        scheduler.start_scheduler()
+        logger.info("后台任务调度器已启动")
+    except Exception as e:
+        logger.error(f"启动后台调度器异常: {e}")
 
 
 @app.on_event("shutdown")

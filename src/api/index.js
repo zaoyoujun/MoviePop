@@ -1,3 +1,7 @@
 export * from './request'
 export * from './movie'
 export * from './source'
+export * from './pool'
+export * from './hotness'
+export * from './jobs'
+export * from './recommend'

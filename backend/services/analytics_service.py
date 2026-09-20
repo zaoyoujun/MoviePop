@@ -9,9 +9,11 @@ from typing import Any
 try:
     from backend.services import db_service
     from backend.services import library_service as lib
+    from backend.core import genre_taxonomy
 except ImportError:
     from services import db_service
     from services import library_service as lib
+    from core import genre_taxonomy
 
 
 EVENT_TYPES = {
@@ -339,11 +341,17 @@ def _build_features(movies: list[dict[str, Any]], events: list[dict[str, Any]], 
 
     category_counter: Counter[str] = Counter()
     favorite_category_counter: Counter[str] = Counter()
+    # 题材白名单（与推荐画像同一套归一口径，滤除 2160p/HEVC 等技术噪声）
+    try:
+        valid_genre_names = genre_taxonomy.build_canonical_name_set(
+            db_service.get_genre_map("movie"), db_service.get_genre_map("tv"))
+    except Exception:
+        valid_genre_names = set()
     for movie in watched:
-        category_counter[_primary_label(movie)] += 1
+        category_counter[_primary_label(movie, valid_genre_names)] += 1
     for movie in movies:
         if movie.get("is_favorite") or movie.get("isFavorite"):
-            favorite_category_counter[_primary_label(movie)] += 1
+            favorite_category_counter[_primary_label(movie, valid_genre_names)] += 1
 
     session_minutes = [
         _watch_delta_seconds(e.get("delta_seconds")) / 60
@@ -567,16 +575,23 @@ def _streak_summary(active_dates: set[str], today) -> tuple[int, int]:
     return current_streak, longest_streak
 
 
-def _primary_label(movie: dict[str, Any]) -> str:
+def _primary_label(movie: dict[str, Any], valid_genre_names: set[str] | None = None) -> str:
+    """统计口径的主题材：genres/tags 中第一个能归一进题材白名单的词。
+
+    白名单为空或全部标签都是噪声（2160p/HEVC…）时回退到分类（动漫/剧集/电影）。
+    """
+    valid = valid_genre_names or set()
     for key in ("genres", "tags"):
         value = movie.get(key)
+        raw_items: list[str] = []
         if isinstance(value, list):
-            for item in value:
-                text = str(item).strip()
-                if text:
-                    return text
+            raw_items = [str(i).strip() for i in value if str(i).strip()]
         elif isinstance(value, str) and value.strip():
-            return value.replace("/", ",").split(",")[0].strip()
+            raw_items = [p.strip() for p in value.replace("/", ",").split(",") if p.strip()]
+        for text in raw_items:
+            canon = genre_taxonomy.canonicalize_tag(text, valid) if valid else ()
+            if canon:
+                return canon[0]
     return _category(movie)
 
 

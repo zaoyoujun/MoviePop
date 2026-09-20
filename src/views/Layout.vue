@@ -164,7 +164,8 @@ function handleCategoryClick(key) {
 const primaryMenuOptions = [
   { label: '首页', key: 'Home', icon: renderIcon(HomeOutline) },
   { label: '收藏', key: 'Favorites', icon: renderIcon(HeartOutline) },
-  { label: '观影统计', key: 'Stats', icon: renderIcon(BarChartOutline) }
+  { label: '观影统计', key: 'Stats', icon: renderIcon(BarChartOutline) },
+  { label: '影视数据库', key: 'Pool', icon: renderIcon(FilmOutline) }
 ]
 
 const movieCategories = [

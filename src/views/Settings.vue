@@ -203,6 +203,131 @@
         </n-form-item>
       </div>
 
+      <!-- AI 大模型设置 -->
+      <div class="llm-section">
+        <n-h3>AI 大模型增强</n-h3>
+        <p class="llm-description">
+          可选功能，默认关闭。启用后大模型可用于：识别刮削时规则解析不了的脏文件名、生成自然语言观影报告。
+          API Key 仅保存在本机，不会内置或上传；网络异常时自动回退到规则与模板，不影响正常使用。
+        </p>
+
+        <n-form-item label="启用 AI 增强">
+          <n-switch v-model:value="llmEnabled" />
+        </n-form-item>
+
+        <n-form-item label="API Key">
+          <div class="api-key-row">
+            <n-input
+              v-model:value="llmApiKey"
+              class="api-key-input"
+              type="password"
+              show-password-on="click"
+              :placeholder="llmHasKey ? `已配置（${llmKeyPreview || '****'}），留空保存则不变` : '请输入 DeepSeek 等 OpenAI 兼容服务的 API Key'"
+            />
+            <n-button v-if="llmHasKey" size="small" type="error" ghost @click="clearLlmKey">
+              清除
+            </n-button>
+          </div>
+          <div class="input-tip">
+            兼容 OpenAI chat/completions 协议；DeepSeek 可在 platform.deepseek.com 申请
+          </div>
+        </n-form-item>
+
+        <n-form-item label="接口地址">
+          <n-input
+            v-model:value="llmBaseUrl"
+            placeholder="https://api.deepseek.com"
+          />
+        </n-form-item>
+
+        <n-form-item label="模型名称">
+          <n-input
+            v-model:value="llmModel"
+            placeholder="deepseek-chat"
+          />
+          <div class="input-tip">其他兼容端点示例：gpt-4o-mini、qwen-plus 等</div>
+        </n-form-item>
+
+        <n-form-item label="增强功能">
+          <div class="llm-toggles">
+            <n-switch v-model:value="llmScrapeEnabled" />
+            <span class="llm-toggle-label">智能刮削识别（规则标题可疑时才调用）</span>
+          </div>
+          <div class="llm-toggles llm-toggles-second">
+            <n-switch v-model:value="llmReportEnabled" />
+            <span class="llm-toggle-label">AI 观影报告</span>
+          </div>
+          <div class="llm-toggles llm-toggles-second">
+            <n-switch v-model:value="llmRerankEnabled" />
+            <span class="llm-toggle-label">AI 推荐精排（虚拟片库「为你发现」页手动触发，缓存 24 小时）</span>
+          </div>
+        </n-form-item>
+
+        <n-form-item label="操作">
+          <n-button
+            type="primary"
+            :loading="llmSaving"
+            @click="saveLlmSettings"
+          >
+            保存设置
+          </n-button>
+          <n-button
+            class="llm-test-btn"
+            :loading="llmTesting"
+            @click="testLlm"
+          >
+            测试连接
+          </n-button>
+        </n-form-item>
+
+        <!-- AI 刮削识别演示：让用户直观验证 G1 是否有效 -->
+        <n-form-item label="刮削演示">
+          <div class="scrape-demo">
+            <div class="scrape-demo-row">
+              <n-input
+                v-model:value="scrapeDemoInput"
+                placeholder="输入一个脏文件名，如：Show.Name.S02.1080p.x265.mkv"
+                @keyup.enter="runScrapeDemo"
+              />
+              <n-button
+                :loading="scrapeDemoLoading"
+                type="primary"
+                ghost
+                @click="runScrapeDemo"
+              >识别</n-button>
+            </div>
+            <p class="input-tip">演示 AI 如何从脏文件名中识别规范片名，不触发真实刮削</p>
+            <div v-if="scrapeDemoResult" class="scrape-demo-result">
+              <div class="demo-line">
+                <span class="demo-label">原始：</span>
+                <span class="demo-value mono">{{ scrapeDemoResult.original }}</span>
+              </div>
+              <div v-if="!scrapeDemoResult.needs_llm" class="demo-line demo-skip">
+                该文件名已干净，规则解析即可，无需 AI
+              </div>
+              <template v-else-if="scrapeDemoResult.result">
+                <div class="demo-line">
+                  <span class="demo-label">识别片名：</span>
+                  <span class="demo-value demo-strong">{{ scrapeDemoResult.result.title }}</span>
+                </div>
+                <div v-if="scrapeDemoResult.result.original_title" class="demo-line">
+                  <span class="demo-label">原名：</span>
+                  <span class="demo-value">{{ scrapeDemoResult.result.original_title }}</span>
+                </div>
+                <div class="demo-line">
+                  <span class="demo-label">置信度：</span>
+                  <span class="demo-value">{{ Math.round((scrapeDemoResult.result.confidence || 0) * 100) }}%</span>
+                </div>
+              </template>
+              <div v-else class="demo-line demo-fail">
+                {{ scrapeDemoResult.message || '识别失败，将保留规则标题' }}
+              </div>
+              <div class="demo-message">{{ scrapeDemoResult.message }}</div>
+            </div>
+          </div>
+        </n-form-item>
+      </div>
+
       <!-- 播放器设置 -->
       <div class="player-section">
         <n-h3>播放器</n-h3>
@@ -344,6 +469,24 @@ const configLoaded = ref(false)
 // 刮削设置
 const doubanCookie = ref('')
 const tmdbApiKey = ref('')
+
+// AI 大模型设置
+const llmEnabled = ref(false)
+const llmScrapeEnabled = ref(true)
+const llmReportEnabled = ref(true)
+const llmRerankEnabled = ref(false)
+const llmApiKey = ref('')
+const llmHasKey = ref(false)
+const llmKeyPreview = ref('')
+const llmBaseUrl = ref('https://api.deepseek.com')
+const llmModel = ref('deepseek-chat')
+const llmSaving = ref(false)
+const llmTesting = ref(false)
+
+// AI 刮削演示
+const scrapeDemoInput = ref('')
+const scrapeDemoLoading = ref(false)
+const scrapeDemoResult = ref(null)
 
 // 播放器设置
 const playerSettings = ref({
@@ -595,6 +738,7 @@ async function init() {
   await loadConfig()
   await getServerStatus()
   await loadPlayerSettings()
+  await loadLlmSettings()
 }
 
 init()
@@ -627,6 +771,154 @@ async function saveScraperSettings() {
     }
   } catch (error) {
     alert('保存失败：' + error.message)
+  }
+}
+
+/**
+ * 加载 AI 大模型配置（Key 仅脱敏展示）
+ */
+async function loadLlmSettings() {
+  try {
+    const response = await fetch(apiUrl('/settings/llm'))
+    const data = await response.json()
+    if (data.code === 0 && data.data) {
+      const d = data.data
+      llmEnabled.value = !!(d.llm_enabled ?? d.llmEnabled)
+      llmScrapeEnabled.value = !!(d.llm_scrape_enabled ?? d.llmScrapeEnabled)
+      llmReportEnabled.value = !!(d.llm_report_enabled ?? d.llmReportEnabled)
+      llmRerankEnabled.value = !!(d.llm_rerank_enabled ?? d.llmRerankEnabled)
+      llmHasKey.value = !!(d.llm_has_key ?? d.llmHasKey)
+      llmKeyPreview.value = d.llm_key_preview || ''
+      llmBaseUrl.value = d.llm_base_url || d.llmBaseUrl || 'https://api.deepseek.com'
+      llmModel.value = d.llm_model || d.llmModel || 'deepseek-chat'
+      llmApiKey.value = ''
+    }
+  } catch (error) {
+    console.log('加载 AI 设置失败:', error)
+  }
+}
+
+/**
+ * 保存 AI 大模型设置（Key 留空保持不变）
+ */
+async function saveLlmSettings() {
+  llmSaving.value = true
+  try {
+    const payload = {
+      llm_enabled: llmEnabled.value,
+      llm_scrape_enabled: llmScrapeEnabled.value,
+      llm_report_enabled: llmReportEnabled.value,
+      llm_rerank_enabled: llmRerankEnabled.value,
+      llm_base_url: llmBaseUrl.value,
+      llm_model: llmModel.value
+    }
+    // 仅在用户输入了新 Key 时才上送；空串后端保持原 Key 不变
+    if (llmApiKey.value.trim()) {
+      payload.llm_api_key = llmApiKey.value.trim()
+    }
+    const response = await fetch(apiUrl('/settings/llm'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    })
+    const data = await response.json()
+    if (data.code === 0) {
+      alert('AI 设置已保存')
+      llmApiKey.value = ''
+      await loadLlmSettings()
+    } else {
+      alert(data.message || '保存失败')
+    }
+  } catch (error) {
+    alert('保存失败：' + error.message)
+  } finally {
+    llmSaving.value = false
+  }
+}
+
+/**
+ * 清除已保存的 API Key
+ */
+async function clearLlmKey() {
+  if (!confirm('确定要清除已保存的 API Key 吗？')) return
+  try {
+    const response = await fetch(apiUrl('/settings/llm'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ llm_api_key: '__clear__' })
+    })
+    const data = await response.json()
+    if (data.code === 0 && data.data) {
+      llmHasKey.value = !!(data.data.llm_has_key ?? data.data.llmHasKey)
+      llmKeyPreview.value = data.data.llm_key_preview || ''
+      llmApiKey.value = ''
+      alert('API Key 已清除')
+    } else {
+      alert(data.message || '清除失败')
+    }
+  } catch (error) {
+    alert('清除失败：' + error.message)
+  }
+}
+
+/**
+ * 测试连接：表单中填了新 Key/base_url/模型时用临时值测试，否则用已保存配置
+ */
+async function testLlm() {
+  llmTesting.value = true
+  try {
+    const payload = {
+      llm_base_url: llmBaseUrl.value,
+      llm_model: llmModel.value
+    }
+    if (llmApiKey.value.trim()) {
+      payload.llm_api_key = llmApiKey.value.trim()
+    }
+    const response = await fetch(apiUrl('/llm/test'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    })
+    const data = await response.json()
+    if (data.code === 0 && data.data && data.data.ok) {
+      alert('连接成功：' + (data.data.message || ''))
+    } else {
+      alert('连接失败：' + (data.data?.message || data.message || '未知错误'))
+    }
+  } catch (error) {
+    alert('连接失败：' + error.message)
+  } finally {
+    llmTesting.value = false
+  }
+}
+
+/**
+ * AI 刮削识别演示：输入脏文件名，调用后端 /llm/scrape-demo 看识别结果
+ */
+async function runScrapeDemo() {
+  const filename = scrapeDemoInput.value.trim()
+  if (!filename) {
+    alert('请输入文件名')
+    return
+  }
+  scrapeDemoLoading.value = true
+  scrapeDemoResult.value = null
+  try {
+    const response = await fetch(apiUrl('/llm/scrape-demo'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filename })
+    })
+    const data = await response.json()
+    if (data.code === 0) {
+      scrapeDemoResult.value = data.data
+    } else {
+      scrapeDemoResult.value = { original: filename, needs_llm: false, result: null, message: data.message || '请求失败' }
+    }
+  } catch (error) {
+    scrapeDemoResult.value = { original: filename, needs_llm: false, result: null, message: `请求失败：${error.message}` }
+  } finally {
+    scrapeDemoLoading.value = false
   }
 }
 
@@ -838,6 +1130,110 @@ async function resetApp() {
   margin-bottom: 16px;
   font-size: 16px;
   font-weight: 600;
+}
+
+.llm-section {
+  margin-top: 32px;
+  padding-top: 24px;
+  border-top: 1px solid #e5e7eb;
+}
+
+.llm-section :deep(.n-h3) {
+  margin-bottom: 12px;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.llm-description {
+  margin: 0 0 16px;
+  font-size: 12px;
+  line-height: 1.7;
+  color: #9ca3af;
+}
+
+.llm-toggles {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.llm-toggles-second {
+  margin-top: 10px;
+}
+
+.llm-toggle-label {
+  font-size: 13px;
+  color: #d1d5db;
+}
+
+.llm-test-btn {
+  margin-left: 12px;
+}
+
+.scrape-demo {
+  width: 100%;
+  max-width: 560px;
+}
+
+.scrape-demo-row {
+  display: flex;
+  gap: 8px;
+}
+
+.scrape-demo-row :deep(.n-input) {
+  flex: 1;
+}
+
+.scrape-demo-result {
+  margin-top: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--mp-line);
+  border-radius: 10px;
+  background: var(--mp-panel);
+}
+
+.demo-line {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  margin: 4px 0;
+  font-size: 13px;
+}
+
+.demo-label {
+  color: var(--mp-text-muted);
+  flex-shrink: 0;
+}
+
+.demo-value {
+  color: var(--mp-text-soft);
+  word-break: break-all;
+}
+
+.demo-value.mono {
+  font-family: ui-monospace, 'Cascadia Code', Consolas, monospace;
+  font-size: 12px;
+}
+
+.demo-value.demo-strong {
+  color: var(--mp-text);
+  font-weight: 700;
+}
+
+.demo-skip {
+  color: var(--mp-text-muted);
+}
+
+.demo-fail {
+  color: #e8a85a;
+}
+
+.demo-message {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--mp-line);
+  color: var(--mp-text-muted);
+  font-size: 12px;
 }
 
 /* Cookie输入框样式 */

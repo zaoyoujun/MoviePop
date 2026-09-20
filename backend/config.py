@@ -77,6 +77,16 @@ class AppConfig:
         self.TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p/w500"
         self.DOUBAN_COOKIE = ""
 
+        # 大模型增强配置（方向 G，默认全关，用户自配 Key）
+        self.LLM_ENABLED = False
+        self.LLM_SCRAPE_ENABLED = True
+        self.LLM_REPORT_ENABLED = True
+        self.LLM_RERANK_ENABLED = False  # G2 发现页 AI 精排（独立开关，默认关，手动触发）
+        self.LLM_API_KEY = ""
+        self.LLM_BASE_URL = "https://api.deepseek.com"
+        self.LLM_MODEL = "deepseek-chat"
+        self.LLM_TIMEOUT = 15
+
         # UI 配置
         self.UI_THEME = "amber"
         self.INTERFACE_THEME = "amber"
@@ -140,6 +150,20 @@ class AppConfig:
             self.TMDB_API_BASE = data.get("tmdb_api_base", self.TMDB_API_BASE)
             self.TMDB_IMAGE_BASE = data.get("tmdb_image_base", self.TMDB_IMAGE_BASE)
             self.DOUBAN_COOKIE = data.get("douban_cookie", self.DOUBAN_COOKIE)
+
+            # 大模型增强
+            self.LLM_ENABLED = self._coerce_bool(data.get("llm_enabled"), self.LLM_ENABLED)
+            self.LLM_SCRAPE_ENABLED = self._coerce_bool(
+                data.get("llm_scrape_enabled"), self.LLM_SCRAPE_ENABLED)
+            self.LLM_REPORT_ENABLED = self._coerce_bool(
+                data.get("llm_report_enabled"), self.LLM_REPORT_ENABLED)
+            self.LLM_RERANK_ENABLED = self._coerce_bool(
+                data.get("llm_rerank_enabled"), self.LLM_RERANK_ENABLED)
+            self.LLM_API_KEY = data.get("llm_api_key", self.LLM_API_KEY)
+            self.LLM_BASE_URL = data.get("llm_base_url", self.LLM_BASE_URL)
+            self.LLM_MODEL = data.get("llm_model", self.LLM_MODEL)
+            self.LLM_TIMEOUT = self._bounded_int(
+                data.get("llm_timeout", self.LLM_TIMEOUT), self.LLM_TIMEOUT, 5, 60)
 
             # UI 配置
             self.UI_THEME = data.get("ui_theme", self.UI_THEME)
@@ -216,6 +240,14 @@ class AppConfig:
             "tmdb_api_base": self.TMDB_API_BASE,
             "tmdb_image_base": self.TMDB_IMAGE_BASE,
             "douban_cookie": self.DOUBAN_COOKIE,
+            "llm_enabled": self.LLM_ENABLED,
+            "llm_scrape_enabled": self.LLM_SCRAPE_ENABLED,
+            "llm_report_enabled": self.LLM_REPORT_ENABLED,
+            "llm_rerank_enabled": self.LLM_RERANK_ENABLED,
+            "llm_api_key": self.LLM_API_KEY,
+            "llm_base_url": self.LLM_BASE_URL,
+            "llm_model": self.LLM_MODEL,
+            "llm_timeout": self.LLM_TIMEOUT,
             "ui_theme": self.UI_THEME,
             "interface_theme": self.INTERFACE_THEME,
             "interface_language": self.INTERFACE_LANGUAGE,
@@ -261,6 +293,22 @@ class AppConfig:
             "tmdb_image_base": self.TMDB_IMAGE_BASE,
             "douban_cookie": self.DOUBAN_COOKIE,
             "doubanCookie": self.DOUBAN_COOKIE,
+            "llm_enabled": self.LLM_ENABLED,
+            "llmEnabled": self.LLM_ENABLED,
+            "llm_scrape_enabled": self.LLM_SCRAPE_ENABLED,
+            "llmScrapeEnabled": self.LLM_SCRAPE_ENABLED,
+            "llm_report_enabled": self.LLM_REPORT_ENABLED,
+            "llmReportEnabled": self.LLM_REPORT_ENABLED,
+            "llm_rerank_enabled": self.LLM_RERANK_ENABLED,
+            "llmRerankEnabled": self.LLM_RERANK_ENABLED,
+            "llm_has_key": bool(self.LLM_API_KEY.strip()),
+            "llmHasKey": bool(self.LLM_API_KEY.strip()),
+            "llm_key_preview": self._mask_secret(self.LLM_API_KEY),
+            "llm_base_url": self.LLM_BASE_URL,
+            "llmBaseUrl": self.LLM_BASE_URL,
+            "llm_model": self.LLM_MODEL,
+            "llmModel": self.LLM_MODEL,
+            "llm_timeout": self.LLM_TIMEOUT,
             "interface_theme": self.INTERFACE_THEME,
             "ui_theme": self.UI_THEME,
             "available_themes": list(self.AVAILABLE_THEMES),
@@ -271,6 +319,16 @@ class AppConfig:
     def _choice(value, default: str, choices: tuple[str, ...]) -> str:
         candidate = str(value or "").strip()
         return candidate if candidate in choices else default
+
+    @staticmethod
+    def _mask_secret(value: str) -> str:
+        """脱敏展示密钥：sk-abcd...wxyz。空值返回空串。"""
+        secret = str(value or "").strip()
+        if not secret:
+            return ""
+        if len(secret) <= 8:
+            return "****"
+        return f"{secret[:4]}...{secret[-4:]}"
 
     @staticmethod
     def _coerce_bool(value, default: bool) -> bool:

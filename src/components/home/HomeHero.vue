@@ -27,13 +27,13 @@
             <span v-for="tag in item.tags" :key="tag">{{ tag }}</span>
           </div>
           <div class="hero-actions">
-            <button class="primary-action" @click="$emit('play', item.id)">
+            <button v-if="item.playable !== false" class="primary-action" @click="$emit('play', item.id)">
               <n-icon><Play /></n-icon>
               {{ item.isResume ? '继续播放' : '立即播放' }}
             </button>
-            <button class="ghost-action" @click="$emit('detail', item.id)">
+            <button class="ghost-action" @click="$emit('detail', item)">
               <n-icon><InformationCircleOutline /></n-icon>
-              详情
+              {{ item.playable !== false ? '详情' : '查看详情' }}
             </button>
           </div>
         </div>

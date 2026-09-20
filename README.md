@@ -2,12 +2,18 @@
 
 一个小型桌面播放器项目，使用 Vue 前端、Python 后端，并通过 Electron 打包为桌面软件。
 
+在私有媒体库之外，内置约 1 万条精选影视元数据（TMDB 在线拉取、本地化存储）与每日热度信号，
+并可选接入 DeepSeek 等 OpenAI 兼容大模型，用于脏文件名智能识别刮削与自然语言观影报告。
+
 ## 功能特点
 
 - **媒体库管理** - 支持 WebDAV、OpenList、本地存储多种数据源
 - **媒体分类浏览** - 电影、剧集、动漫、综艺、音乐等分类
 - **收藏与历史** - 收藏喜欢的媒体，查看观影历史
-- **观影统计** - 统计观影时长、分类分布等数据
+- **观影统计** - 统计观影时长、分类分布、观影人格画像，支持 AI 自然语言月度报告
+- **精选影视数据库** - 首次启动下载约 1 万条 TMDB 热门/高分元数据，FTS5 全文搜索、热门榜、高分榜
+- **热度信号** - 每日快照 vote_count/popularity，形成热度时间序列与趋势看板
+- **AI 智能刮削（可选）** - 规则解析置信度低时由大模型识别脏文件名、生成刮削搜索词，失败自动回退规则
 - **详情预览** - 展示媒体详细信息、相关推荐
 
 ## 技术栈
@@ -15,6 +21,8 @@
 - **前端**: Vue 3 + Composition API + Vite
 - **后端**: Python + FastAPI
 - **桌面**: Electron
+- **数据存储**: SQLite（媒体库 + FTS5 全文索引 + 热度时间序列 + LLM 响应缓存）
+- **外部数据**: TMDB API（精选元数据与热度），OpenAI 兼容大模型 API（可选增强）
 - **UI 组件**: Naive UI + Ionicons
 
 ## 目录结构
@@ -28,7 +36,7 @@ JMH-MoviePop/
 ├── start-frontend.bat       # Windows 一键启动脚本
 │
 ├── src/                     # Vue 前端源码
-│   ├── api/                 # API 接口封装（含模拟数据）
+│   ├── api/                 # API 接口封装（含模拟数据；pool/jobs/hotness/llm）
 │   ├── assets/              # 图片、样式、字体等资源
 │   ├── components/          # 通用组件（按功能模块划分）
 │   │   ├── common/          # 通用组件（播放器、弹窗等）
@@ -45,6 +53,8 @@ JMH-MoviePop/
 │   │   ├── Layout.vue       # 应用布局
 │   │   ├── MovieDetail.vue  # 影片详情页
 │   │   ├── Scrape.vue       # 手动刮削页
+│   │   ├── Pool.vue         # 精选影视数据库（热门榜/高分榜/搜索）
+│   │   ├── FirstBoot.vue    # 首次启动数据下载引导页
 │   │   ├── Server.vue       # 服务器管理页
 │   │   ├── Settings.vue     # 设置页
 │   │   └── Stats.vue        # 观影统计页
@@ -64,6 +74,9 @@ JMH-MoviePop/
 ├── backend/                 # Python 后端
 │   ├── api/                 # HTTP 接口路由
 │   ├── core/                # 核心模块（扫描、刮削、文件解析）
+│   │                        # tmdb_fetcher 精选拉取 / scheduler 定时调度
+│   │                        # jobs_state 后台任务 / llm_client 大模型客户端
+│   │                        # llm_scrape AI 刮削识别 / llm_insight AI 观影报告
 │   ├── services/            # 业务逻辑服务
 │   ├── player/              # 播放器相关
 │   ├── openlist/            # OpenList 客户端
@@ -167,6 +180,19 @@ Windows 数据保存位置：安装版与便携版均使用 `MoviePop.exe` 同�
 
 安装包已内置 libmpv 与 OpenList，普通用户无需手动下载播放器或 OpenList 依赖。源码构建时会自动从项目 Runtime Release 获取这两个大型 Windows 运行时文件。
 
+## 可选大模型增强（AI 刮削 / AI 观影报告）
+
+AI 能力**默认关闭**，不需要任何 Key 即可使用全部基础功能。启用步骤：
+
+1. 在「设置」中打开 AI 大模型开关，填写自己的 API Key（兼容 OpenAI `chat/completions` 协议）：
+   - DeepSeek：`https://api.deepseek.com`，模型如 `deepseek-chat`
+   - 也可填写任何 OpenAI 兼容端点（自部署 vLLM / 其他厂商）。
+2. 分别勾选「智能刮削增强」「观影报告」分开关。
+3. Key 仅保存在本机 `MoviePopData/backend/config.json`，不会内置或上传；请求只包含片名等元数据与统计数字。
+
+降级保证：未配置 Key、网络错误、超时（15 秒）或服务异常时，自动回退到规则解析与模板文案，刮削和统计功能不受影响。LLM 响应写入本地 `llm_cache` 表，同一影片不重复计费。
+
 ## API 文档
 
-后端 API 接口文档详见 `docs/` 目录下的文档文件。
+后端 API 接口文档详见 `docs/` 目录下的文档文件。设计方案见
+`docs/大数据增强方案-元数据本地化与热度信号.md`（方向 A 元数据本地化、F 热度信号、G 大模型增强）。

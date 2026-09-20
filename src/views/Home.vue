@@ -89,6 +89,7 @@ import OnlineBrowser from '@/components/online/OnlineBrowser.vue'
 import { MOCK_DATA } from '@/api/mockData'
 import { startPlay } from '@/composables/usePlayer'
 import { addFavorite, getHistory, getHomeData, removeFavorite } from '@/api/movie'
+import { getDiscoverRecommendations } from '@/api/recommend'
 import { saveScrollPosition, scheduleScrollRestore, trackScrollPosition } from '@/utils/scrollRestoration'
 import { consumeScanCompleted, consumeScanItemsPublished } from '@/composables/useScanToast'
 import { isTestMode } from '@/utils/runtime'
@@ -179,11 +180,18 @@ const activeSortOption = computed(() =>
   sortOptions.find(option => option.value === sortMode.value) || sortOptions[0]
 )
 
-const heroItems = computed(() =>
-  homeData.value.hero
+const discoverItems = ref([])
+
+const heroItems = computed(() => {
+  const localHero = homeData.value.hero
     .map(normalizeHeroItem)
     .filter(item => item.backdrop)
-)
+  // 融入 metadata_pool 发现推荐，让 1 万条精选数据在首页可见
+  const poolHero = discoverItems.value
+    .map(normalizePoolHeroItem)
+    .filter(item => item.backdrop)
+  return [...localHero, ...poolHero]
+})
 
 const rawVisibleItems = computed(() => {
   const category = currentCategory.value
@@ -277,15 +285,17 @@ async function fetchHomeData() {
     const params = new URLSearchParams({ limit: '200' })
     if (currentCategory.value !== 'all') params.set('category', currentCategory.value)
 
-    const [data, historyData] = await Promise.all([
+    const [data, historyData, discoverData] = await Promise.all([
       getHomeData(Object.fromEntries(params.entries())),
-      getHistory({ page_size: '6' })
+      getHistory({ page_size: '6' }),
+      getDiscoverRecommendations(8).catch(() => ({ items: [] }))
     ])
     homeData.value = {
       stats: data?.stats || { total: 0, remote: 0, local: 0, favorite: 0 },
       hero: Array.isArray(data?.hero) ? data.hero : [],
       items: Array.isArray(data?.items) ? data.items : []
     }
+    discoverItems.value = Array.isArray(discoverData?.items) ? discoverData.items : []
     continueHistory.value = Array.isArray(historyData?.list) ? historyData.list : []
   } catch (error) {
     loadError.value = error instanceof Error ? error.message : '首页数据加载失败'
@@ -319,9 +329,17 @@ async function refreshHomeData({ force = false } = {}) {
   await fetchHomeData()
 }
 
-function goDetail(id) {
+function goDetail(item) {
   saveScrollPosition(currentScrollKey())
-  router.push({ name: 'MovieDetail', params: { id } })
+  // 兼容旧调用（传 id）和新调用（传 item 对象）
+  const id = typeof item === 'object' ? item?.id : item
+  const isPool = typeof item === 'object' && item.playable === false
+  if (isPool) {
+    // metadata_pool 条目跳转到影视数据库页并打开详情抽屉
+    router.push({ name: 'Pool', query: { detail: id } })
+  } else {
+    router.push({ name: 'MovieDetail', params: { id } })
+  }
 }
 
 async function handlePlay(id) {
@@ -385,6 +403,24 @@ function normalizeHeroItem(item) {
     tags: Array.isArray(item.tags) && item.tags.length
       ? item.tags
       : [categoryLabel, item.releaseDate || item.year, sourceName, item.durationText].filter(Boolean)
+  }
+}
+
+function normalizePoolHeroItem(item) {
+  // metadata_pool 发现推荐转成首页轮播格式；无本地播放路径，playable=false
+  const TMDB_BACKDROP = 'https://image.tmdb.org/t/p/w780'
+  const genres = Array.isArray(item.genres) ? item.genres.slice(0, 2) : []
+  return {
+    id: item.poolId || item.id,
+    title: item.title || '未命名',
+    year: item.year || '',
+    rating: Number(item.voteAverage) > 0 ? Number(item.voteAverage).toFixed(1) : '',
+    description: item.overview || '来自影视数据库的精选推荐，点击查看详情。',
+    backdrop: item.backdropPath ? `${TMDB_BACKDROP}${item.backdropPath}` : '',
+    recommendationReason: item.reason || '为你发现',
+    isResume: false,
+    playable: false,
+    tags: [item.mediaType === 'tv' ? '剧集' : '电影', ...genres].filter(Boolean)
   }
 }
 

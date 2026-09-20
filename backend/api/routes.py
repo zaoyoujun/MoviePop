@@ -26,6 +26,12 @@ try:
     from backend.services import system_service
     from backend.services import analytics_service
     from backend.services import db_service
+    from backend.services import recommend_service
+    from backend.services import rerank_service
+    from backend.core import jobs_state, tmdb_fetcher, scheduler
+    from backend.core import llm_client
+    from backend.core import llm_scrape
+    from backend.services import llm_insight_service
 except ImportError:
     from api.schemas import api_response
     from services import library_service as lib
@@ -34,7 +40,13 @@ except ImportError:
     from services import source_service
     from services import system_service
     from services import analytics_service
+    from services import recommend_service
+    from services import rerank_service
     from services import db_service
+    from core import jobs_state, tmdb_fetcher, scheduler
+    from core import llm_client
+    from core import llm_scrape
+    from services import llm_insight_service
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -215,6 +227,173 @@ async def update_scraper_settings(request: Request):
     except Exception as exc:
         logger.exception("Update scraper settings failed")
         return api_response(code=500, message=str(exc))
+
+
+@router.get("/api/settings/llm")
+async def get_llm_settings():
+    """返回大模型配置。API Key 不明文回显，仅返回是否已配置与脱敏预览。"""
+    AppConfig = _get_app_config_class()
+    config = AppConfig()
+    config.load_config()
+    return api_response(data={
+        "llm_enabled": config.LLM_ENABLED,
+        "llmEnabled": config.LLM_ENABLED,
+        "llm_scrape_enabled": config.LLM_SCRAPE_ENABLED,
+        "llmScrapeEnabled": config.LLM_SCRAPE_ENABLED,
+        "llm_report_enabled": config.LLM_REPORT_ENABLED,
+        "llmReportEnabled": config.LLM_REPORT_ENABLED,
+        "llm_rerank_enabled": config.LLM_RERANK_ENABLED,
+        "llmRerankEnabled": config.LLM_RERANK_ENABLED,
+        "llm_has_key": bool(config.LLM_API_KEY.strip()),
+        "llmHasKey": bool(config.LLM_API_KEY.strip()),
+        "llm_key_preview": config._mask_secret(config.LLM_API_KEY),
+        "llm_base_url": config.LLM_BASE_URL,
+        "llmBaseUrl": config.LLM_BASE_URL,
+        "llm_model": config.LLM_MODEL,
+        "llmModel": config.LLM_MODEL,
+        "llm_timeout": config.LLM_TIMEOUT,
+    })
+
+
+@router.post("/api/settings/llm")
+async def update_llm_settings(request: Request):
+    """保存大模型配置（白名单字段）。llm_api_key 留空表示保持原 Key 不变。"""
+    AppConfig = _get_app_config_class()
+    try:
+        body = await _parse_request_body(request)
+        config = AppConfig()
+        config.load_config()
+
+        if "llm_enabled" in body:
+            config.LLM_ENABLED = _coerce_bool(body.get("llm_enabled"))
+        if "llm_scrape_enabled" in body:
+            config.LLM_SCRAPE_ENABLED = _coerce_bool(body.get("llm_scrape_enabled"))
+        if "llm_report_enabled" in body:
+            config.LLM_REPORT_ENABLED = _coerce_bool(body.get("llm_report_enabled"))
+        if "llm_rerank_enabled" in body:
+            config.LLM_RERANK_ENABLED = _coerce_bool(body.get("llm_rerank_enabled"))
+        # 缺省或空串均不改 Key；需要清除时前端显式传 "__clear__"
+        raw_key = body.get("llm_api_key", body.get("llmApiKey", None))
+        if raw_key is not None:
+            if str(raw_key).strip() == "__clear__":
+                config.LLM_API_KEY = ""
+            elif str(raw_key).strip():
+                config.LLM_API_KEY = str(raw_key).strip()
+        if "llm_base_url" in body and str(body.get("llm_base_url") or "").strip():
+            config.LLM_BASE_URL = str(body.get("llm_base_url")).strip()
+        if "llm_model" in body and str(body.get("llm_model") or "").strip():
+            config.LLM_MODEL = str(body.get("llm_model")).strip()
+        if "llm_timeout" in body:
+            config.LLM_TIMEOUT = config._bounded_int(
+                body.get("llm_timeout"), config.LLM_TIMEOUT, 5, 60)
+
+        config.save_config()
+        return api_response(data={
+            "llm_enabled": config.LLM_ENABLED,
+            "llmEnabled": config.LLM_ENABLED,
+            "llm_scrape_enabled": config.LLM_SCRAPE_ENABLED,
+            "llmScrapeEnabled": config.LLM_SCRAPE_ENABLED,
+            "llm_report_enabled": config.LLM_REPORT_ENABLED,
+            "llmReportEnabled": config.LLM_REPORT_ENABLED,
+            "llm_rerank_enabled": config.LLM_RERANK_ENABLED,
+            "llmRerankEnabled": config.LLM_RERANK_ENABLED,
+            "llm_has_key": bool(config.LLM_API_KEY.strip()),
+            "llmHasKey": bool(config.LLM_API_KEY.strip()),
+            "llm_key_preview": config._mask_secret(config.LLM_API_KEY),
+            "llm_base_url": config.LLM_BASE_URL,
+            "llmBaseUrl": config.LLM_BASE_URL,
+            "llm_model": config.LLM_MODEL,
+            "llmModel": config.LLM_MODEL,
+            "llm_timeout": config.LLM_TIMEOUT,
+        })
+    except Exception as exc:
+        logger.exception("Update LLM settings failed")
+        return api_response(code=500, message=str(exc))
+
+
+@router.post("/api/llm/test")
+async def test_llm_connection(request: Request):
+    """连通性测试：可临时带 body 中的 base_url/model/key（保存前测试），缺省用已保存配置。"""
+    try:
+        body = await _parse_request_body(request)
+    except Exception:
+        body = {}
+
+    AppConfig = _get_app_config_class()
+    config = AppConfig()
+    config.load_config()
+
+    # 保存前测试：body 提供非空值时临时覆盖（不落盘）
+    if str(body.get("llm_base_url", body.get("llmBaseUrl", "")) or "").strip():
+        config.LLM_BASE_URL = str(body.get("llm_base_url", body.get("llmBaseUrl"))).strip()
+    if str(body.get("llm_model", body.get("llmModel", "")) or "").strip():
+        config.LLM_MODEL = str(body.get("llm_model", body.get("llmModel"))).strip()
+    raw_key = str(body.get("llm_api_key", body.get("llmApiKey", "")) or "").strip()
+    if raw_key:
+        config.LLM_API_KEY = raw_key
+
+    result = llm_client.test_connection()
+    return api_response(data=result, code=0 if result.get("ok") else 1,
+                        message=result.get("message") or "")
+
+
+@router.post("/api/llm/scrape-demo")
+async def llm_scrape_demo(request: Request):
+    """AI 刮削识别演示：输入一个脏文件名，返回 LLM 识别出的规范片名。
+
+    用于让用户直观验证 G1 是否真的有效，不触发真实刮削。
+    body: {"filename": "Show.Name.S02.1080p.x265.mkv"}
+    返回: {"original": "...", "needs_llm": bool, "result": {...} | null, "message": str}
+    """
+    try:
+        body = await _parse_request_body(request)
+    except Exception:
+        body = {}
+
+    filename = str(body.get("filename") or body.get("title") or "").strip()
+    if not filename:
+        return api_response(code=1, message="请输入文件名", data={"original": "", "needs_llm": False, "result": None})
+
+    needs_llm = llm_scrape.title_needs_llm(filename)
+    if not llm_client.feature_enabled("LLM_SCRAPE_ENABLED"):
+        return api_response(data={
+            "original": filename,
+            "needs_llm": needs_llm,
+            "result": None,
+            "message": "AI 刮削未启用，请先开启「智能刮削识别」并配置 API Key"
+        })
+
+    if not needs_llm:
+        return api_response(data={
+            "original": filename,
+            "needs_llm": False,
+            "result": None,
+            "message": "该文件名已足够干净，规则解析即可，无需 AI 识别"
+        })
+
+    # 构造模拟 movie dict，复用 enhance_scrape_title 的完整链路
+    movie = {
+        "title": filename,
+        "files": [{"path": filename}],
+        "category": "movie",
+        "year_hint": 0,
+        "season": 1,
+    }
+    result = llm_scrape.enhance_scrape_title(movie)
+    if not result:
+        return api_response(data={
+            "original": filename,
+            "needs_llm": True,
+            "result": None,
+            "message": "AI 识别失败或置信度过低，将保留规则标题"
+        })
+
+    return api_response(data={
+        "original": filename,
+        "needs_llm": True,
+        "result": result,
+        "message": f"AI 识别成功（置信度 {result['confidence']:.0%}）"
+    })
 
 
 @router.post("/api/cache/clear")
@@ -753,6 +932,28 @@ async def record_analytics_event(request: Request):
 @router.post("/api/analytics/event")
 async def record_analytics_event_alias(request: Request):
     return await record_analytics_event(request)
+
+
+@router.post("/api/analytics/llm-report")
+async def generate_llm_viewing_report(request: Request):
+    """生成 AI 自然语言观影报告（G3）。
+
+    body: {"days": 30, "force_refresh": false, "include_template": false}
+    AI 未开启或调用失败时 data.source 为 template，由前端正常展示模板报告。
+    include_template=true 且 AI 成功时，data.templateReport 附带模板版供对比。
+    """
+    try:
+        body = await _parse_request_body(request)
+        days = int(body.get("days", 30) or 30)
+        force_refresh = _coerce_bool(body.get("force_refresh", False))
+        include_template = _coerce_bool(body.get("include_template", False))
+        data = llm_insight_service.generate_viewing_report(
+            days, force_refresh=force_refresh, include_template=include_template
+        )
+        return api_response(data=data, message=data.get("message") or "ok")
+    except Exception as exc:
+        logger.exception("Generate LLM viewing report failed")
+        return api_response(code=500, message=str(exc))
 
 
 @router.get("/api/scrape/sources")
@@ -3080,3 +3281,293 @@ def _set_favorite(movie_id: str, favorite: bool):
     except Exception as exc:
         logger.debug("Record favorite event failed: movie=%s error=%s", movie_id, exc)
     return api_response(data={"id": movie_id, "isFavorite": favorite})
+
+
+# ==================== 后台任务（jobs）====================
+
+@router.get("/api/jobs/status")
+def jobs_status():
+    """返回所有后台任务进度。前端引导页轮询此接口。"""
+    return api_response(data=jobs_state.get_all())
+
+
+def _run_pool_job(task: str, func):
+    """启动一个后台线程执行任务，避免阻塞 HTTP 请求。"""
+    if jobs_state.is_running(task):
+        return api_response(message="任务正在进行中", data=jobs_state.get(task))
+    import threading
+    t = threading.Thread(target=func, daemon=True, name=f"job-{task}")
+    t.start()
+    return api_response(data=jobs_state.get(task))
+
+
+@router.post("/api/jobs/refresh/all")
+def jobs_refresh_all():
+    """手动触发全量拉取（首次下载或重置）。"""
+    return _run_pool_job(tmdb_fetcher.TASK_INITIAL, tmdb_fetcher.fetch_initial_pool)
+
+
+@router.post("/api/jobs/refresh/trending")
+def jobs_refresh_trending():
+    """手动触发 trending 刷新。"""
+    return _run_pool_job(tmdb_fetcher.TASK_TRENDING, tmdb_fetcher.refresh_trending)
+
+
+@router.post("/api/jobs/refresh/hotness")
+def jobs_refresh_hotness():
+    """手动触发热度快照（写 hotness_series 时间序列）。"""
+    return _run_pool_job(tmdb_fetcher.TASK_HOTNESS, tmdb_fetcher.refresh_hotness)
+
+
+@router.post("/api/jobs/backfill-genres")
+def jobs_backfill_genres():
+    """手动触发题材回填（重放列表计划，约 5~10 分钟，零详情额度）。"""
+    return _run_pool_job(tmdb_fetcher.TASK_GENRE_BACKFILL, tmdb_fetcher.backfill_genres)
+
+
+_CANCELABLE_TASKS = {
+    tmdb_fetcher.TASK_INITIAL,
+    tmdb_fetcher.TASK_TRENDING,
+    tmdb_fetcher.TASK_HOTNESS,
+    tmdb_fetcher.TASK_GENRE_BACKFILL,
+}
+
+
+@router.post("/api/jobs/cancel/{task}")
+def jobs_cancel(task: str):
+    """请求取消正在运行的后台任务（任务在每轮循环检测取消标志后自行结束，已写入数据保留）。"""
+    if task not in _CANCELABLE_TASKS:
+        return api_response(code=400, message="未知任务", data=None)
+    if not jobs_state.is_running(task):
+        return api_response(message="任务未在运行", data=jobs_state.get(task))
+    jobs_state.request_cancel(task)
+    return api_response(message="已请求取消", data=jobs_state.get(task))
+
+
+# ==================== 虚拟片库（pool）====================
+
+def _pool_item_to_api(row: dict) -> dict:
+    """把 metadata_pool 行归一化为前端 API 格式。"""
+    import json as _json
+    return {
+        "id": row.get("id") or "",
+        "source": row.get("source") or "",
+        "externalId": row.get("external_id") or "",
+        "mediaType": row.get("media_type") or "",
+        "title": row.get("title") or "",
+        "originalTitle": row.get("original_title") or "",
+        "releaseDate": row.get("release_date") or "",
+        "year": row.get("year"),
+        "overview": row.get("overview") or "",
+        "genres": _json.loads(row["genres"]) if row.get("genres") else [],
+        "posterPath": row.get("poster_path") or "",
+        "backdropPath": row.get("backdrop_path") or "",
+        "voteAverage": row.get("vote_average"),
+        "voteCount": row.get("vote_count"),
+        "popularity": row.get("popularity"),
+        "originCountry": _json.loads(row["origin_country"]) if row.get("origin_country") else [],
+        "runtime": row.get("runtime"),
+        "status": row.get("status") or "",
+        "detailFetched": bool(row.get("detail_fetched")),
+        "fetchedAt": row.get("fetched_at") or "",
+        "updatedAt": row.get("updated_at") or "",
+    }
+
+
+@router.get("/api/pool/search")
+def pool_search(q: str = "", sort: str = "popularity", media_type: str = "",
+                page: int = 1, per_page: int = 20):
+    """搜索虚拟片库（FTS5 全文检索 / 分页浏览）。"""
+    rows = db_service.query_pool({
+        "q": q, "sort": sort, "media_type": media_type,
+        "page": page, "per_page": per_page,
+    })
+    total = db_service.pool_count(media_type=media_type or None, q=q or None)
+    return api_response(data={
+        "items": [_pool_item_to_api(r) for r in rows],
+        "total": total,
+        "page": page,
+        "per_page": per_page,
+    })
+
+
+@router.get("/api/pool/trending")
+def pool_trending(media_type: str = "", per_page: int = 20):
+    """热门榜（按 popularity DESC）。"""
+    rows = db_service.query_pool({"sort": "popularity", "media_type": media_type,
+                                   "page": 1, "per_page": min(50, per_page)})
+    return api_response(data={"items": [_pool_item_to_api(r) for r in rows]})
+
+
+@router.get("/api/pool/top-rated")
+def pool_top_rated(media_type: str = "", per_page: int = 20):
+    """高分榜（按 vote_average DESC）。"""
+    rows = db_service.query_pool({"sort": "vote_average", "media_type": media_type,
+                                   "page": 1, "per_page": min(50, per_page)})
+    return api_response(data={"items": [_pool_item_to_api(r) for r in rows]})
+
+
+@router.get("/api/pool/count")
+def pool_count_api():
+    """返回虚拟片库总条数（引导页/看板用）。"""
+    return api_response(data={"count": db_service.pool_count()})
+
+
+@router.get("/api/pool/{pool_id}")
+def pool_detail(pool_id: str):
+    """虚拟片库条目详情（若未拉详情则懒加载补全）。"""
+    item = tmdb_fetcher.fetch_detail(pool_id)
+    if not item:
+        return api_response(code=404, message="条目不存在")
+    return api_response(data=_pool_item_to_api(item))
+
+
+@router.post("/api/pool/{pool_id}/detail")
+def pool_ensure_detail(pool_id: str):
+    """手动触发详情懒加载补全。"""
+    item = tmdb_fetcher.fetch_detail(pool_id)
+    if not item:
+        return api_response(code=404, message="条目不存在")
+    return api_response(data=_pool_item_to_api(item))
+
+
+def _hotness_row_to_api(row: dict) -> dict:
+    """热度快照行 → 前端 API camelCase 格式。"""
+    return {
+        "poolId": row.get("pool_id") or "",
+        "source": row.get("source") or "",
+        "externalId": row.get("external_id") or "",
+        "voteAverage": row.get("vote_average"),
+        "voteCount": row.get("vote_count"),
+        "popularity": row.get("popularity"),
+        "collectionCount": row.get("collection_count"),
+        "fetchedAt": row.get("fetched_at") or "",
+    }
+
+
+@router.get("/api/pool/{pool_id}/hotness")
+def pool_hotness(pool_id: str, days: int = 30):
+    """虚拟片库条目热度时间序列（近 N 天快照，按时间升序）。"""
+    days = max(1, min(365, days))
+    rows = db_service.get_hotness_series(pool_id, days)
+    return api_response(data={
+        "poolId": pool_id,
+        "days": days,
+        "items": [_hotness_row_to_api(r) for r in rows],
+    })
+
+
+@router.get("/api/pool/{pool_id}/similar")
+def pool_similar(pool_id: str, limit: int = 12):
+    """影视数据库相似推荐：同类型+同年代，按类型交集数+热度排序。"""
+    limit = max(1, min(24, int(limit)))
+    rows = db_service.find_similar_pool_items(pool_id, limit=limit)
+    return api_response(data={"poolId": pool_id, "items": [_pool_item_to_api(r) for r in rows]})
+
+
+# ==================== 想看清单（wishlist）====================
+
+@router.get("/api/wishlist")
+def wishlist_list():
+    """想看清单列表（关联 metadata_pool 展示字段）。"""
+    rows = db_service.list_wishlist()
+    return api_response(data={"items": rows})
+
+
+@router.get("/api/wishlist/{pool_id}")
+def wishlist_check(pool_id: str):
+    """检查某条目是否在想看清单中。"""
+    return api_response(data={"poolId": pool_id, "inWishlist": db_service.in_wishlist(pool_id)})
+
+
+@router.post("/api/wishlist/{pool_id}")
+async def wishlist_add(pool_id: str, request: Request):
+    """加入想看清单。"""
+    try:
+        body = await _parse_request_body(request)
+        note = str(body.get("note", "") or "")
+    except Exception:
+        note = ""
+    db_service.add_wishlist(pool_id, note)
+    return api_response(data={"poolId": pool_id, "inWishlist": True}, message="已加入想看清单")
+
+
+@router.delete("/api/wishlist/{pool_id}")
+def wishlist_remove(pool_id: str):
+    """从想看清单移除。"""
+    removed = db_service.remove_wishlist(pool_id)
+    return api_response(data={"poolId": pool_id, "inWishlist": False},
+                        message="已移除" if removed else "不在清单中")
+
+
+@router.get("/api/movies/{movie_id}/hotness")
+def movie_hotness(movie_id: str, days: int = 30):
+    """私有片库条目热度趋势。通过 tmdb_id 关联虚拟片库 (pool_id = tmdb:{tmdb_id})。"""
+    movie = lib.get_movie_by_id(movie_id)
+    if not movie:
+        return api_response(code=404, message="Movie not found")
+    days = max(1, min(365, days))
+    tmdb_id = str(movie.get("tmdb_id") or "").strip()
+    if not tmdb_id:
+        # 私有条目无 TMDB 关联 → 返回空序列，前端据此显示"无热度信号"
+        return api_response(data={
+            "movieId": movie_id,
+            "poolId": "",
+            "days": days,
+            "linked": False,
+            "items": [],
+        })
+    pool_id = f"tmdb:{tmdb_id}"
+    rows = db_service.get_hotness_series(pool_id, days)
+    return api_response(data={
+        "movieId": movie_id,
+        "poolId": pool_id,
+        "days": days,
+        "linked": True,
+        "items": [_hotness_row_to_api(r) for r in rows],
+    })
+
+
+def _hotness_top_to_api(row: dict) -> dict:
+    """Top 热度榜行 → camelCase（快照 + 池条目展示信息）。"""
+    return {
+        "poolId": row.get("pool_id") or "",
+        "source": row.get("source") or "",
+        "externalId": row.get("external_id") or "",
+        "title": row.get("title") or "",
+        "originalTitle": row.get("original_title") or "",
+        "mediaType": row.get("media_type") or "",
+        "posterPath": row.get("poster_path") or "",
+        "year": row.get("year"),
+        "voteAverage": row.get("vote_average"),
+        "voteCount": row.get("vote_count"),
+        "popularity": row.get("popularity"),
+        "fetchedAt": row.get("fetched_at") or "",
+    }
+
+
+@router.get("/api/pool/hotness/top")
+def pool_hotness_top(limit: int = 20):
+    """虚拟片库热度 Top 榜：各条目最近一次快照按 popularity 降序。"""
+    limit = max(1, min(100, limit))
+    rows = db_service.get_top_hotness_by_popularity(limit)
+    return api_response(data={"limit": limit, "items": [_hotness_top_to_api(r) for r in rows]})
+
+
+# ==================== 发现推荐（recommend）====================
+
+@router.get("/api/recommend/discover")
+def recommend_discover(limit: int = 12, rerank: bool = False, refresh: bool = False):
+    """基于虚拟片库热度 + 用户偏好的发现推荐。
+
+    候选不限于用户已拥有影片；冷启动（本地无足够行为）时退化为纯热度推荐。
+    每条带 reason 解释标签（正在热门/高分佳作/符合你的偏好/片库已有 等）。
+
+    rerank=true 且 LLM_RERANK_ENABLED 开启时走 G2 AI 精排（超时/失败自动回退规则序，
+    返回体 reranked=false）；refresh=true 强制绕过 24h 精排缓存。
+    """
+    if rerank:
+        result = rerank_service.rerank_discover(limit, refresh=refresh)
+    else:
+        result = recommend_service.discover_recommendations(limit)
+    return api_response(data=result)

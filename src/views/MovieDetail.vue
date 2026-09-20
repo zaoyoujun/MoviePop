@@ -166,6 +166,19 @@
               <span class="info-value">{{ detail.metadataSource }}</span>
             </div>
 
+            <!-- AI 刮削修正痕迹：证明 AI 真实参与了片名识别 -->
+            <div v-if="detail.aiScrapeCorrection" class="info-item ai-correction">
+              <span class="info-label">AI 识别</span>
+              <div class="ai-correction-body">
+                <span class="ai-from" :title="detail.aiScrapeCorrection.from">{{ detail.aiScrapeCorrection.from }}</span>
+                <n-icon size="14" class="ai-arrow"><ChevronForward /></n-icon>
+                <span class="ai-to">{{ detail.aiScrapeCorrection.to }}</span>
+                <span v-if="detail.aiScrapeCorrection.confidence" class="ai-conf">
+                  置信度 {{ detail.aiScrapeCorrection.confidence }}
+                </span>
+              </div>
+            </div>
+
             <!-- 锁定状态 -->
             <div class="info-item">
               <span class="info-label">自定义资料</span>
@@ -227,6 +240,7 @@ import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   ChevronBack,
+  ChevronForward,
   Star,
   Play,
   Heart,
@@ -613,6 +627,7 @@ function normalizeDetail(data) {
     isFavorite: data.isFavorite || false,
     metadataSource: data.metadataSource || '',
     metadataLocked: data.metadataLocked || false,
+    aiScrapeCorrection: data.aiScrapeCorrection || null,
     versions,
     seasons,
     mediaVersions
@@ -1381,6 +1396,33 @@ onMounted(() => {
 .lock-status span {
   font-size: 13px;
   color: #a0a0b0;
+}
+
+.ai-correction .ai-correction-body {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 13px;
+}
+.ai-from {
+  color: #a0a0b0;
+  text-decoration: line-through;
+  text-decoration-color: rgba(255, 255, 255, 0.2);
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ai-arrow { color: #8e7cff; flex-shrink: 0; }
+.ai-to { color: #d8d0ff; font-weight: 600; }
+.ai-conf {
+  margin-left: 4px;
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: rgba(142, 124, 255, 0.16);
+  color: #b8a8ff;
+  font-size: 11px;
 }
 
 .text-truncate {

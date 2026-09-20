@@ -1017,6 +1017,7 @@ def movie_to_api_format(movie: dict) -> dict:
         "languages": languages,
         "metadataSource": movie.get("metadata_source", ""),
         "metadataLocked": bool(movie.get("metadata_locked")),
+        "aiScrapeCorrection": movie.get("ai_scrape_correction"),
         "originalTitle": movie.get("original_title", ""),
         "tmdbId": movie.get("tmdb_id", ""),
         "tmdbMediaType": movie.get("tmdb_media_type", ""),

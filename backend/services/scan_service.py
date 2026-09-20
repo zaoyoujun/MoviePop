@@ -14,12 +14,14 @@ try:
     from backend.core.filename_parser import merge_series_videos
     from backend.core.local_scanner import LocalScanner
     from backend.core.webdav_client import VIDEO_EXTENSIONS, WebDAVClient
+    from backend.core import llm_scrape
 except ImportError:
     from config import AppConfig
     from core.filename_parser import merge_series_videos
     from core.local_scanner import LocalScanner
     from core.webdav_client import VIDEO_EXTENSIONS, WebDAVClient
-from . import library_service, source_service
+    from core import llm_scrape
+from . import library_service, source_service, db_service
 
 logger = logging.getLogger(__name__)
 
@@ -825,6 +827,62 @@ def _preferred_scrape_source(scraper: Any, movie: dict[str, Any]) -> str:
     return "auto"
 
 
+def _fallback_to_pool(title: str, year_hint: int, is_series: bool) -> dict[str, Any] | None:
+    """TMDB 刮削失败时，用本地 metadata_pool 按片名+年份兜底匹配。
+
+    返回与 scraper.scrape 兼容的 meta dict，未命中返回 None。
+    """
+    if not title:
+        return None
+    try:
+        media_type = "tv" if is_series else "movie"
+        # 用 query_pool 的关键词搜索（FTS5），取同 media_type 且年份最接近的
+        rows = db_service.query_pool({"q": title, "media_type": media_type, "page": 1, "per_page": 10})
+        if not rows:
+            return None
+        best = None
+        best_score = -1.0
+        for row in rows:
+            r_title = str(row.get("title") or "")
+            if not r_title:
+                continue
+            # 标题包含匹配度
+            title_lower = title.lower()
+            r_title_lower = r_title.lower()
+            title_match = 1.0 if title_lower == r_title_lower else (
+                0.8 if title_lower in r_title_lower or r_title_lower in title_lower else 0.3
+            )
+            # 年份接近度
+            r_year = int(row.get("year") or 0)
+            year_diff = abs(r_year - year_hint) if year_hint and r_year else 0
+            year_score = max(0.0, 1.0 - year_diff / 10.0) if year_hint else 0.5
+            score = title_match * 0.7 + year_score * 0.3
+            if score > best_score:
+                best_score = score
+                best = row
+        if not best or best_score < 0.4:
+            return None
+        poster = best.get("poster_path") or ""
+        backdrop = best.get("backdrop_path") or ""
+        return {
+            "title": best.get("title"),
+            "cover_url": f"https://image.tmdb.org/t/p/w342{poster}" if poster else "",
+            "backdrop_url": f"https://image.tmdb.org/t/p/w780{backdrop}" if backdrop else "",
+            "description": best.get("overview") or "",
+            "score": best.get("vote_average"),
+            "year": best.get("year"),
+            "genres": [g.strip() for g in str(best.get("genres") or "").split(",") if g.strip()],
+            "countries": [c.strip() for c in str(best.get("origin_country") or "").split(",") if c.strip()],
+            "original_title": best.get("original_title") or "",
+            "tmdb_media_type": media_type,
+            "metadata_source": "metadata_pool",
+            "duration": best.get("runtime"),
+        }
+    except Exception as exc:
+        logger.debug("metadata_pool 兜底跳过: %s", exc)
+        return None
+
+
 def _create_scraper() -> Any | None:
     try:
         try:
@@ -870,6 +928,29 @@ def _scrape_metadata(
             )
             
             query_names = _scrape_query_names(movie)
+            # G1：规则解析置信度低时，由大模型识别规范片名（未配置/失败静默回退规则标题）。
+            # 已锁定元数据的条目标题已规范化，无需再识别。
+            scrape_aliases = list(movie.get("aliases") or [])
+            llm_match = None
+            if not movie.get("metadata_locked"):
+                try:
+                    llm_match = llm_scrape.enhance_scrape_title(movie)
+                except Exception as exc:
+                    logger.debug("AI 刮削增强跳过: %s", exc)
+            if llm_match:
+                rule_title = scrape_title
+                scrape_title = llm_match["title"]
+                original_title = str(llm_match.get("original_title") or "").strip()
+                if original_title and original_title not in scrape_aliases:
+                    scrape_aliases.append(original_title)
+                # 记录 AI 修正痕迹，供前端刮削日志/详情展示，证明 AI 真实参与
+                if rule_title and llm_match.get("title") and rule_title != llm_match["title"]:
+                    movie["ai_scrape_correction"] = {
+                        "from": rule_title,
+                        "to": llm_match["title"],
+                        "confidence": llm_match.get("confidence"),
+                        "at": datetime.now().isoformat(timespec="seconds"),
+                    }
             preferred_source = _preferred_scrape_source(scraper, movie)
             logger.info("开始刮削：选择%s源 搜索名：%s", preferred_source, " ，".join(query_names))
 
@@ -892,7 +973,7 @@ def _scrape_metadata(
                 season=int(movie.get("season") or 1),
                 is_series=bool(movie.get("is_series")),
                 season_title=movie.get("season_title", ""),
-                aliases=movie.get("aliases", []),
+                aliases=scrape_aliases,
                 origin_countries=movie.get("origin_countries", []),
                 chapter_name=movie.get("chapter_name", ""),
                 part=movie.get("part"),
@@ -904,6 +985,15 @@ def _scrape_metadata(
                 logger.info("刮削成功")
             else:
                 logger.info("未搜索到  %s", scrape_title)
+                # metadata_pool 本地兜底：TMDB 刮削失败时，用本地影视库按片名+年份匹配
+                pool_meta = _fallback_to_pool(
+                    scrape_title,
+                    int(movie.get("year_hint") or 0),
+                    bool(movie.get("is_series")),
+                )
+                if pool_meta:
+                    logger.info("metadata_pool 兜底命中：%s", pool_meta.get("title"))
+                    meta = pool_meta
             if meta.get("title"):
                 movie["metadata_title"] = meta["title"]
                 if not movie.get("season_title") and not movie.get("special_type"):
