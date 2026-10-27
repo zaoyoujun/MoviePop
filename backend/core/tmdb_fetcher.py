@@ -29,6 +29,8 @@ TASK_INITIAL = "pool_initial"  # 首次全量拉取
 TASK_TRENDING = "trending_refresh"  # 每日 trending 刷新
 TASK_HOTNESS = "hotness_refresh"  # 热度快照
 TASK_GENRE_BACKFILL = "genre_backfill"  # 题材回填（重放列表计划补 genre_ids/genres）
+TASK_DETAIL_PREFETCH = "detail_prefetch"  # 详情预拉取（每日 06:00 Top 2000）
+TASK_ANIME_PULL = "anime_pull"  # TMDB 日本动漫 Top N（手动触发）
 
 # 限速：200ms 一请求 ≈ 5 req/s
 _REQUEST_INTERVAL = 0.2
@@ -446,3 +448,77 @@ def fetch_detail(pool_id: str) -> dict | None:
     item.update(updates)
     db_service.upsert_pool_item(item)
     return item
+
+
+def prefetch_details(top: int = 2000) -> None:
+    """详情预拉取（每日 06:00 调度，可手动触发/取消）。
+
+    懒加载只能覆盖用户浏览过的条目，这里按 popularity Top N 主动补全，
+    让推荐题材信号（genres）与详情面板对热门条目提前可用。
+    复用 fetch_detail（单条早退 + 批量字段归一），逐条限速。
+    """
+    config = _config()
+    if not config.TMDB_API_KEY:
+        jobs_state.finish(TASK_DETAIL_PREFETCH, label="未配置 TMDB API Key", error="no_api_key")
+        return
+    jobs_state.start(TASK_DETAIL_PREFETCH, label=f"正在预拉取热门 Top {top} 详情…")
+    top_items = db_service.get_top_pool_by_popularity(top)
+    pending = [it["pool_id"] for it in top_items if not it.get("detail_fetched")]
+    if not pending:
+        jobs_state.finish(TASK_DETAIL_PREFETCH, label="热门条目详情均已补全，无需处理")
+        return
+    done = 0
+    for pool_id in pending:
+        if jobs_state.is_cancel_requested(TASK_DETAIL_PREFETCH):
+            jobs_state.finish(
+                TASK_DETAIL_PREFETCH,
+                label=f"已取消（已补全 {done} 条）", error="cancelled")
+            return
+        try:
+            fetch_detail(pool_id)
+        except Exception as exc:
+            logger.warning("详情预拉取失败 pool_id=%s error=%s", pool_id, exc)
+        done += 1
+        jobs_state.update(
+            TASK_DETAIL_PREFETCH, done / len(pending),
+            f"已补全 {done} / {len(pending)} 条详情")
+        time.sleep(_REQUEST_INTERVAL)
+    jobs_state.finish(TASK_DETAIL_PREFETCH, label=f"完成，共补全 {done} 条详情")
+
+
+def pull_anime_top(top: int = 1000) -> None:
+    """拉取 TMDB 日本动漫 Top N 入库（POST /api/jobs/anime-pull 手动触发）。
+
+    用 discover/tv（动画流派 genre_id=16 + 原产国 JP + popularity 排序），
+    与片库其余 TMDB 条目同一套 id/题材/热度链路，推荐端经
+    「动画题材 + 日本」推断自动识别为动漫。条目按列表级数据入库
+    （detail_fetched=0），详情由预拉取/懒加载补全。
+    """
+    config = _config()
+    api_key, api_base = config.TMDB_API_KEY, config.TMDB_API_BASE
+    if not api_key:
+        jobs_state.finish(TASK_ANIME_PULL, label="未配置 TMDB API Key", error="no_api_key")
+        return
+    jobs_state.start(TASK_ANIME_PULL, label=f"正在拉取 TMDB 动漫 Top {top}…")
+    try:
+        maps = ensure_genre_maps(api_key, api_base)
+    except Exception as exc:
+        jobs_state.finish(TASK_ANIME_PULL, label=f"题材映射获取失败：{exc}", error="genre_map_failed")
+        return
+    pages = (top + 19) // 20  # discover 每页 20 条
+    plan = [{
+        "endpoint": "/discover/tv",
+        "media_type": "tv",
+        "pages": pages,
+        "params": {
+            "with_genres": 16,
+            "with_origin_country": "JP",
+            "sort_by": "popularity.desc",
+            "language": "zh-CN",
+        },
+    }]
+    processed, cancelled = _run_list_plan(TASK_ANIME_PULL, plan, maps, api_key, api_base)
+    if cancelled:
+        jobs_state.finish(TASK_ANIME_PULL, label=f"已取消（已入库 {processed} 条）", error="cancelled")
+    else:
+        jobs_state.finish(TASK_ANIME_PULL, label=f"完成，共处理 {processed} 条动漫")

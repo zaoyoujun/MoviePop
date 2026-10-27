@@ -342,7 +342,8 @@ const tabs = [
 const mediaFilters = [
   { value: '', label: '全部' },
   { value: 'movie', label: '电影' },
-  { value: 'tv', label: '剧集' }
+  { value: 'tv', label: '剧集' },
+  { value: 'anime', label: '动漫' }
 ]
 
 const activeTab = ref('all')
@@ -404,16 +405,22 @@ const emptyHint = computed(() => {
 })
 
 function posterUrl(path) {
+  // Bangumi 等外部源存的是完整 URL，TMDB 存相对路径
+  if (!path) return path
+  if (/^https?:\/\//.test(path)) return path
   return `${TMDB_IMG}${path}`
 }
 
 function backdropUrl(path) {
+  if (!path) return path
+  if (/^https?:\/\//.test(path)) return path
   return `${TMDB_BACKDROP}${path}`
 }
 
 function typeLabel(t) {
   if (t === 'movie') return '电影'
   if (t === 'tv') return '剧集'
+  if (t === 'anime') return '动漫'
   return t || ''
 }
 

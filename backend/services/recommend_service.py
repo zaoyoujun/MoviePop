@@ -148,7 +148,8 @@ def _rule_recall(profile: dict, candidates: list[dict]) -> tuple[list[dict], dic
         media_type = (c.get("media_type") or "").lower()
         genres = _parse_name_list(c.get("genres"))
         countries = _parse_name_list(c.get("origin_country"))
-        anime = _is_anime(genres, countries)
+        # Bangumi 源条目 media_type='anime' 直接判定；TMDB 源走题材+国家推断
+        anime = media_type == "anime" or _is_anime(genres, countries)
         external_id = str(c.get("external_id") or "")
         owned = external_id in owned_ids
 

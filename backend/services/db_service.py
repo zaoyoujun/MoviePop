@@ -1008,10 +1008,16 @@ def pool_count(media_type: str | None = None, q: str | None = None) -> int:
                 (q,)
             ).fetchone()
         elif media_type:
-            row = conn.execute(
-                'SELECT COUNT(*) FROM metadata_pool WHERE media_type = ?',
-                (media_type,)
-            ).fetchone()
+            # 动漫 = Bangumi 源条目 ∪ TMDB 动画条目（genres 含「动画」）
+            if media_type == 'anime':
+                row = conn.execute(
+                    "SELECT COUNT(*) FROM metadata_pool WHERE media_type = 'anime' OR genres LIKE '%\"动画\"%'"
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    'SELECT COUNT(*) FROM metadata_pool WHERE media_type = ?',
+                    (media_type,)
+                ).fetchone()
         else:
             row = conn.execute('SELECT COUNT(*) FROM metadata_pool').fetchone()
         return int(row[0]) if row else 0
@@ -1047,7 +1053,7 @@ _POOL_UPSERT_SQL = '''
       vote_average=excluded.vote_average, vote_count=excluded.vote_count,
       popularity=excluded.popularity, origin_country=excluded.origin_country,
       runtime=excluded.runtime, status=excluded.status,
-      detail_fetched=metadata_pool.detail_fetched,
+      detail_fetched=MAX(metadata_pool.detail_fetched, excluded.detail_fetched),
       updated_at=excluded.updated_at,
       genre_ids=excluded.genre_ids
 '''
@@ -1177,12 +1183,18 @@ def query_pool(params: dict) -> list[dict]:
     try:
         rows = []
         if q:
+            # FTS5 unicode61 分词器不切分 CJK 连续串：裸词「咒术」匹配不到
+            # 「咒术回战」。给每个未带通配的词补前缀 *，中文部分词与英文
+            # partial 搜索都能命中（已带 * 的词保持原样）。
+            fts_q = ' '.join(
+                t if t.endswith('*') else t + '*' for t in q.split() if t
+            )
             sql = '''SELECT m.* FROM metadata_pool m
                      JOIN metadata_pool_fts f ON m.rowid = f.rowid
                      WHERE metadata_pool_fts MATCH ?
                      ORDER BY rank
                      LIMIT ? OFFSET ?'''
-            rows = conn.execute(sql, (q, per_page, offset)).fetchall()
+            rows = conn.execute(sql, (fts_q, per_page, offset)).fetchall()
         else:
             order = 'popularity DESC'
             if sort == 'vote_count':
@@ -1191,8 +1203,16 @@ def query_pool(params: dict) -> list[dict]:
                 order = 'vote_average DESC'
             elif sort == 'year':
                 order = 'year DESC'
-            where = 'WHERE media_type = ?' if media_type else ''
-            args = [media_type] if media_type else []
+            # 动漫 = Bangumi 源条目（media_type='anime'）∪ TMDB 动画条目
+            # （zh-CN 题材归一后流派名固定为「动画」，存于 genres JSON 数组）
+            if media_type == 'anime':
+                where = "WHERE media_type = 'anime' OR genres LIKE '%\"动画\"%'"
+                args = []
+            elif media_type:
+                where = 'WHERE media_type = ?'
+                args = [media_type]
+            else:
+                where, args = '', []
             sql = f'SELECT * FROM metadata_pool {where} ORDER BY {order} LIMIT ? OFFSET ?'
             rows = conn.execute(sql, tuple(args + [per_page, offset])).fetchall()
         return [dict(r) for r in rows]
@@ -1274,7 +1294,7 @@ def get_top_pool_by_popularity(limit: int = 500) -> list[dict]:
             '''SELECT id AS pool_id, source, external_id, title, original_title,
                       media_type, poster_path, backdrop_path, release_date, year,
                       vote_average, vote_count, popularity, genres, genre_ids,
-                      overview, origin_country, runtime, updated_at
+                      overview, origin_country, runtime, updated_at, detail_fetched
                FROM metadata_pool
                ORDER BY CASE WHEN popularity IS NULL THEN 1 ELSE 0 END,
                         popularity DESC, vote_count DESC
@@ -1426,6 +1446,19 @@ def list_pool_ids() -> set[str]:
     conn = sqlite3.connect(DB_PATH)
     try:
         return {r[0] for r in conn.execute('SELECT id FROM metadata_pool')}
+    finally:
+        conn.close()
+
+
+def list_pool_ids_by_source(source: str) -> list[dict]:
+    """返回某来源（如 'bangumi'）的全部条目 id 与 external_id，供周同步刷新热度。"""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            'SELECT id, external_id FROM metadata_pool WHERE source = ?', (source,)
+        ).fetchall()
+        return [dict(r) for r in rows]
     finally:
         conn.close()
 

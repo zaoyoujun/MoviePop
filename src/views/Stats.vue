@@ -244,6 +244,9 @@
               </div>
 
               <p v-if="llmReport.message" class="report-message">{{ llmReport.message }}</p>
+              <p v-if="llmReportStale" class="report-message report-stale">
+                报告生成后观影数据已有更新，点击「重新生成」可获取最新解读。
+              </p>
 
               <div v-if="llmReport.source === 'empty'" class="report-empty">
                 近 {{ reportDays }} 天暂无有效观影记录，先去看几部影片吧。
@@ -643,7 +646,7 @@ import { getStats } from '@/api/movie'
 import { startPlay } from '@/composables/usePlayer'
 import { get } from '@/api/request'
 import { getTopHotness, getPoolHotness } from '@/api/hotness'
-import { generateViewingReport } from '@/api/llm'
+import { generateViewingReport, getLastViewingReport } from '@/api/llm'
 
 const router = useRouter()
 const ranges = [
@@ -807,6 +810,7 @@ const profileDimensions = computed(() => [
 const reportDays = ref(30)
 const llmReport = ref(null)
 const llmReportLoading = ref(false)
+const llmReportStale = ref(false)
 const showCompare = ref(false)
 
 const sourceLabel = computed(() => {
@@ -890,11 +894,28 @@ function toggleCompare() {
   showCompare.value = !showCompare.value
 }
 
+// 恢复上次生成的报告（后端持久化，零 LLM 成本）；找不到返回 false
+async function restoreLastReport() {
+  try {
+    const res = await getLastViewingReport(reportDays.value)
+    if (res?.found && res?.report?.report) {
+      llmReport.value = res.report
+      llmReportStale.value = !!res.stale
+      if (llmReport.value.source !== 'llm') showCompare.value = false
+      return true
+    }
+  } catch {
+    // 恢复失败静默处理，让用户手动生成
+  }
+  return false
+}
+
 async function loadLlmReport(forceRefresh = false) {
   llmReportLoading.value = true
   try {
     // AI 报告请求时附带模板版，供「对比模板版」功能使用
     llmReport.value = await generateViewingReport(reportDays.value, forceRefresh, true)
+    llmReportStale.value = false
     if (llmReport.value?.source !== 'llm') {
       showCompare.value = false
     }
@@ -914,7 +935,10 @@ async function loadLlmReport(forceRefresh = false) {
 function selectReportDays(days) {
   if (reportDays.value === days || llmReportLoading.value) return
   reportDays.value = days
-  loadLlmReport(false)
+  // 优先恢复该窗口的持久化报告，从未生成过才触发真实生成
+  restoreLastReport().then((restored) => {
+    if (!restored) loadLlmReport(false)
+  })
 }
 const categoryDistribution = computed(() => asArray(stats.value?.categoryDistribution))
 const sourceDistribution = computed(() => asArray(stats.value?.sourceDistribution).slice(0, 6))
@@ -1207,6 +1231,8 @@ function handleScanComplete() {
 onMounted(() => {
   loadStats()
   loadHotness()
+  // 恢复上次生成的观影报告（零 LLM 成本），刷新后不再要求重新生成
+  restoreLastReport()
   window.addEventListener('scan:completed', handleScanComplete)
 })
 
@@ -1554,6 +1580,7 @@ onUnmounted(() => {
 .report-regenerate-btn:hover:not(:disabled) { color: #fff; border-color: rgba(142, 124, 255, 0.6); }
 .report-regenerate-btn:disabled { cursor: wait; opacity: 0.6; }
 .report-message { margin-top: 14px; padding: 9px 12px; border-radius: 8px; color: #e7c98f; background: rgba(231, 201, 143, 0.08); font-size: 12px; line-height: 1.6; }
+.report-stale { color: #f0a56a; background: rgba(240, 165, 106, 0.08); }
 .report-empty { margin-top: 16px; padding: 24px 0; color: var(--mp-text-soft); font-size: 13px; text-align: center; }
 .report-markdown { margin-top: 14px; color: var(--mp-text); font-size: 13.5px; line-height: 1.85; }
 .report-markdown :deep(h3) { margin: 18px 0 8px; font-size: 15px; }

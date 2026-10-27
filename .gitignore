@@ -76,10 +76,17 @@ backend/openlist/openlist.exe
 
 # Personal academic documents (local only)
 docs/大数据增强方案-元数据本地化与热度信号.md
-docs/大数据类优秀论文.docx
-docs/毕业设计第一周周报.docx
-docs/毕业设计第二周周报.docx
-docs/论文框架.docx
+docs/*.docx
 scripts/generate_paper_framework.py
 scripts/generate_weekly_report.py
 scripts/inspect_ref_paper.py
+
+# Thesis diagrams and app screenshots (local only)
+docs/figures/
+docs/screenshots/
+docs/screenshot_home.png
+docs/ER图.html
+docs/UML用例图.html
+docs/数据流图.html
+docs/系统总体框架图.html
+docs/系统架构图.html

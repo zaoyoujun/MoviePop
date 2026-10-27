@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 _RECALL_SIZE = 50        # 规则召回后交给 LLM 的候选数
 _REASON_TOP_N = 15      # 仅前 N 名要求写理由
 _CACHE_TTL_HOURS = 24   # 精排结果有效期
-_LLM_TIMEOUT = 10       # 精排硬超时（秒），超时即回退
+_LLM_TIMEOUT = 30       # 精排超时（秒），reasoning 模型 50 条候选需 ~15s 思考
 _MAX_TOKENS = 2048      # reasoning 模型耗尽时 llm_client 会自动放大重试一次
 
 _SYSTEM_PROMPT = (

@@ -31,3 +31,8 @@ export function demoScrapeIdentify(filename) {
 export function generateViewingReport(days = 30, forceRefresh = false, includeTemplate = false) {
   return post('/analytics/llm-report', { days, force_refresh: forceRefresh, include_template: includeTemplate })
 }
+
+// 读取上次生成的观影报告（持久化恢复，零 LLM 成本）；report.stale=true 表示数据已更新可重新生成
+export function getLastViewingReport(days = 30) {
+  return get(`/analytics/llm-report/last?days=${days}`)
+}

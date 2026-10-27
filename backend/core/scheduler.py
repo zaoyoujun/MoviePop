@@ -10,11 +10,11 @@ import logging
 from datetime import datetime, timedelta
 
 try:
-    from backend.core import jobs_state, tmdb_fetcher
+    from backend.core import jobs_state, tmdb_fetcher, bangumi_fetcher
     from backend.services import db_service
     from backend.config import AppConfig
 except ImportError:
-    from core import jobs_state, tmdb_fetcher
+    from core import jobs_state, tmdb_fetcher, bangumi_fetcher
     from services import db_service
     from config import AppConfig
 
@@ -27,6 +27,12 @@ _running = False
 _DAILY_JOBS = [
     (tmdb_fetcher.TASK_TRENDING, (4, 0), tmdb_fetcher.refresh_trending),
     (tmdb_fetcher.TASK_HOTNESS, (5, 0), tmdb_fetcher.refresh_hotness),
+    (tmdb_fetcher.TASK_DETAIL_PREFETCH, (6, 0), tmdb_fetcher.prefetch_details),
+]
+
+# (任务名, weekday 0=周一..6=周日, 计划时刻 hour:minute, 执行函数)
+_WEEKLY_JOBS = [
+    (bangumi_fetcher.TASK_BANGUMI_SYNC, 6, (3, 30), bangumi_fetcher.refresh_bangumi_hotness),
 ]
 _STATE_PREFIX = "scheduler_last_ok:"
 
@@ -65,16 +71,27 @@ def _tracked_run(name: str, func):
     return t
 
 
-def _last_due_date(scheduled_hour: int, scheduled_minute: int, now: datetime) -> datetime.date:
-    """最近一个应执行日期：今天计划时刻已过则是今天，否则是昨天。"""
+def _last_due_date(scheduled_hour: int, scheduled_minute: int, now: datetime,
+                   weekday: int | None = None) -> datetime.date:
+    """最近一个应执行日期：今天计划时刻已过则是今天，否则是昨天。
+
+    weekly（weekday 0=周一..6=周日）：最近一个已过去的计划日；若今天是计划日
+    但时刻未到，则回溯到上一个计划日。
+    """
     due_today = now.replace(hour=scheduled_hour, minute=scheduled_minute, second=0, microsecond=0)
-    if now >= due_today:
-        return now.date()
-    return (now - timedelta(days=1)).date()
+    if weekday is None:
+        if now >= due_today:
+            return now.date()
+        return (now - timedelta(days=1)).date()
+    days_since = (now.weekday() - weekday) % 7
+    due = (now - timedelta(days=days_since)).date()
+    if days_since == 0 and now < due_today:
+        due -= timedelta(days=7)
+    return due
 
 
 def _catch_up_missed():
-    """启动时检查每日任务是否错过（关机跨过 04:00/05:00 的场景），错过立即补跑一次。"""
+    """启动时检查每日/每周任务是否错过（关机跨过计划时刻的场景），错过立即补跑一次。"""
     now = datetime.now()
     for name, (hour, minute), func in _DAILY_JOBS:
         try:
@@ -84,6 +101,17 @@ def _catch_up_missed():
                 continue
             # 片库为空时 fetcher 自身会以 pool_empty 结束；这里不额外拦截，由任务内部处理
             logger.info("检测到任务 %s 错过计划（最近到期 %s，上次成功 %s），启动补跑",
+                        name, due.isoformat(), last_ok or "从未")
+            _tracked_run(name, func)
+        except Exception as exc:
+            logger.debug("补跑检查失败 %s: %s", name, exc)
+    for name, weekday, (hour, minute), func in _WEEKLY_JOBS:
+        try:
+            last_ok = db_service.get_app_state(_STATE_PREFIX + name)
+            due = _last_due_date(hour, minute, now, weekday=weekday)
+            if last_ok == due.isoformat():
+                continue
+            logger.info("检测到周任务 %s 错过计划（最近到期 %s，上次成功 %s），启动补跑",
                         name, due.isoformat(), last_ok or "从未")
             _tracked_run(name, func)
         except Exception as exc:
@@ -99,6 +127,9 @@ def _daily_loop():
         # 到点触发（首次下载未完成/任务已在跑则跳过；错过由启动补跑与下一分钟检查兜底）
         for name, (hour, minute), func in _DAILY_JOBS:
             if now.hour == hour and now.minute == minute:
+                _tracked_run(name, func)
+        for name, weekday, (hour, minute), func in _WEEKLY_JOBS:
+            if now.weekday() == weekday and now.hour == hour and now.minute == minute:
                 _tracked_run(name, func)
         # 每 60 秒检查一次
         for _ in range(60):

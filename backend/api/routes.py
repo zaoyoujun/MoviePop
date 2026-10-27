@@ -29,6 +29,7 @@ try:
     from backend.services import recommend_service
     from backend.services import rerank_service
     from backend.core import jobs_state, tmdb_fetcher, scheduler
+    from backend.core import bangumi_fetcher
     from backend.core import llm_client
     from backend.core import llm_scrape
     from backend.services import llm_insight_service
@@ -44,6 +45,7 @@ except ImportError:
     from services import rerank_service
     from services import db_service
     from core import jobs_state, tmdb_fetcher, scheduler
+    from core import bangumi_fetcher
     from core import llm_client
     from core import llm_scrape
     from services import llm_insight_service
@@ -932,6 +934,17 @@ async def record_analytics_event(request: Request):
 @router.post("/api/analytics/event")
 async def record_analytics_event_alias(request: Request):
     return await record_analytics_event(request)
+
+
+@router.get("/api/analytics/llm-report/last")
+async def get_last_llm_viewing_report(days: int = Query(30, ge=7, le=365)):
+    """读取上次生成的观影报告（零 LLM 成本），stale=true 表示数据已更新可重新生成。"""
+    try:
+        data = llm_insight_service.get_last_report(days)
+        return api_response(data=data)
+    except Exception as exc:
+        logger.exception("Get last LLM viewing report failed")
+        return api_response(code=500, message=str(exc))
 
 
 @router.post("/api/analytics/llm-report")
@@ -3325,11 +3338,36 @@ def jobs_backfill_genres():
     return _run_pool_job(tmdb_fetcher.TASK_GENRE_BACKFILL, tmdb_fetcher.backfill_genres)
 
 
+@router.post("/api/jobs/prefetch-details")
+def jobs_prefetch_details():
+    """手动触发详情预拉取（popularity Top 2000 补全详情）。"""
+    return _run_pool_job(tmdb_fetcher.TASK_DETAIL_PREFETCH, tmdb_fetcher.prefetch_details)
+
+
+@router.post("/api/jobs/anime-pull")
+def jobs_anime_pull():
+    """手动触发 TMDB 日本动漫 Top 1000 拉取入库。
+
+    注：原 /api/jobs/bangumi-pull 因 Bangumi 官方 search API 空 keyword
+    深度分页失效（任何 offset 返回同一页）而改为 TMDB discover 数据源。
+    """
+    return _run_pool_job(tmdb_fetcher.TASK_ANIME_PULL, tmdb_fetcher.pull_anime_top)
+
+
+@router.post("/api/jobs/bangumi-sync")
+def jobs_bangumi_sync():
+    """手动触发 Bangumi 已入库动漫的热度刷新（调度器每周日 03:30 自动执行）。"""
+    return _run_pool_job(bangumi_fetcher.TASK_BANGUMI_SYNC, bangumi_fetcher.refresh_bangumi_hotness)
+
+
 _CANCELABLE_TASKS = {
     tmdb_fetcher.TASK_INITIAL,
     tmdb_fetcher.TASK_TRENDING,
     tmdb_fetcher.TASK_HOTNESS,
     tmdb_fetcher.TASK_GENRE_BACKFILL,
+    tmdb_fetcher.TASK_DETAIL_PREFETCH,
+    tmdb_fetcher.TASK_ANIME_PULL,
+    bangumi_fetcher.TASK_BANGUMI_SYNC,
 }
 
 
